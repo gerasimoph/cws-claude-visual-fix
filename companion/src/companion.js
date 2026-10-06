@@ -9,6 +9,7 @@ import {
   loadReviews, saveReview, saveScreenshot, readScreenshot, recordMetric, ensureDataDir,
 } from './store.js';
 import { runChecks, decideStatus, explainStatus, compareSignatures } from './verify.js';
+import { describeProject } from './detect.js';
 import { formatReviewForAgent, formatAnnotationFull, formatInspection, formatReportResult } from './format.js';
 import { log } from './log.js';
 
@@ -42,6 +43,7 @@ export class Companion {
       .handle('hello', () => this.helloPayload())
       .handle('projects.list', () => ({ projects: this.reloadProjects() }))
       .handle('project.addOrigin', (p) => this.addOrigin(p))
+      .handle('project.connect', (p) => this.connectProject(p))
       .handle('review.submit', (p) => this.submitReview(p))
       .handle('review.cancel', (p) => this.cancelReview(p))
       .handle('annotation.accept', (p) => this.acceptAnnotation(p))
@@ -54,6 +56,7 @@ export class Companion {
       projects: this.reloadProjects(),
       reviews: [...this.reviews.values()].map((r) => this.compactReview(r)),
       agents: this.agentStatus(),
+      candidates: this.candidates(),
     };
   }
 
@@ -77,6 +80,35 @@ export class Companion {
     if (this.persist) saveProjects(projects);
     this.projects = projects;
     this.notifyProjectsChanged();
+    return { project };
+  }
+
+  // An agent running in a folder that is not a known project yet: the browser
+  // confirms which page belongs to it (PRD §14.3 — confirmation is required).
+  connectProject({ candidateId, origin }) {
+    const o = normalizeOrigin(origin);
+    if (!o) throw new Error('Invalid origin');
+    const sessions = [...this.sessions.values()].filter((s) => s.candidate?.id === candidateId);
+    if (!sessions.length) throw new Error('That agent session is gone — restart it in the project folder');
+    const { defaultPort, ...facts } = sessions[0].candidate;
+    const projects = this.reloadProjects();
+    for (const p of projects) p.origins = (p.origins || []).filter((x) => x !== o);
+    const existing = projects.find((p) => p.id === facts.id);
+    const project = {
+      ...(existing || {}),
+      ...facts,
+      origins: [...new Set([o, ...(existing?.origins || [])])],
+      agentMode: 'attach',
+      connectedAt: existing?.connectedAt || new Date().toISOString(),
+    };
+    const next = [...projects.filter((p) => p.id !== project.id), project];
+    if (this.persist) saveProjects(next);
+    this.projects = next;
+    for (const s of sessions) { s.projectId = project.id; s.candidate = null; }
+    recordMetric('project_connected', { framework: project.framework || null, via: 'browser' });
+    this.notifyProjectsChanged();
+    this.pushAgents();
+    this.dispatch(project.id);
     return { project };
   }
 
@@ -222,11 +254,13 @@ export class Companion {
     session.client = typeof client === 'string' ? client.slice(0, 80) : null;
     const project = findProjectByDirectory(this.reloadProjects(), session.cwd);
     session.projectId = project?.id || null;
+    session.candidate = !project && session.cwd ? describeProject(session.cwd) : null;
+    this.pushAgents();
     return { version: VERSION, project: project ? { id: project.id, name: project.name } : null, browserConnected: !!this.extension };
   }
 
   waiterMatches(w, projectId) {
-    return !w.session.projectId || w.session.projectId === projectId;
+    return w.session.projectId === projectId;
   }
 
   async waitForReview(session, { timeoutMs = 300_000 } = {}) {
@@ -250,7 +284,8 @@ export class Companion {
       waiter.timer = setTimeout(() => {
         this.waiters = this.waiters.filter((w) => w !== waiter);
         this.pushAgents();
-        resolve({ review: null, text: 'No review yet. Call wait_for_review again to keep waiting for the user to press "Fix all" in the browser.' });
+        const hint = session.projectId ? '' : ' This folder is not connected to a page yet: ask the user to open the app in Chrome and click "Connect" in the review panel.';
+        resolve({ review: null, text: `No review yet.${hint} Call wait_for_review again to keep waiting for the user to press "Fix all" in the browser.` });
       }, Math.max(1000, Math.min(Number(timeoutMs) || 300_000, 3_600_000)));
       this.waiters.push(waiter);
       this.pushAgents();
@@ -260,13 +295,13 @@ export class Companion {
   findOrphanedReview(session) {
     const liveOwners = new Set([...this.sessions.values()].map((s) => s.reviewId).filter(Boolean));
     return [...this.reviews.values()].find((r) => r.status === 'running' && !liveOwners.has(r.id)
-      && (!session.projectId || r.projectId === session.projectId)) || null;
+      && r.projectId === session.projectId) || null;
   }
 
   nextPendingReview(session) {
     const busyProjects = new Set([...this.reviews.values()].filter((r) => r.status === 'running').map((r) => r.projectId));
     return [...this.reviews.values()]
-      .filter((r) => r.status === 'pending' && !busyProjects.has(r.projectId) && (!session.projectId || r.projectId === session.projectId))
+      .filter((r) => r.status === 'pending' && !busyProjects.has(r.projectId) && r.projectId === session.projectId)
       .sort((a, b) => a.createdAt - b.createdAt)[0] || null;
   }
 
@@ -540,7 +575,6 @@ export class Companion {
 
   agentStatus() {
     const status = {};
-    const projectIds = this.projects.map((p) => p.id);
     for (const s of this.sessions.values()) {
       if (s.reviewId) {
         const r = this.reviews.get(s.reviewId);
@@ -548,13 +582,24 @@ export class Companion {
       }
     }
     for (const w of this.waiters) {
-      for (const pid of w.session.projectId ? [w.session.projectId] : projectIds) status[pid] ||= 'waiting';
+      if (w.session.projectId) status[w.session.projectId] ||= 'waiting';
     }
     return status;
   }
 
+  candidates() {
+    const out = new Map();
+    for (const s of this.sessions.values()) {
+      if (!s.candidate) continue;
+      const waiting = this.waiters.some((w) => w.session === s);
+      const prev = out.get(s.candidate.id);
+      out.set(s.candidate.id, { ...s.candidate, waiting: waiting || !!prev?.waiting });
+    }
+    return [...out.values()];
+  }
+
   pushAgents() {
-    this.extension?.notify('agents.update', { agents: this.agentStatus() });
+    this.extension?.notify('agents.update', { agents: this.agentStatus(), candidates: this.candidates() });
   }
 }
 

@@ -29,6 +29,18 @@ async function main() {
       await runMcp();
       break;
     }
+    case 'setup': {
+      const f = flags(rest);
+      const { setup } = await import('../src/setup.js');
+      await setup({
+        yes: !!f.yes,
+        skipAgent: !!f.skipAgent,
+        wait: f.wait,
+        extensionIds: f.extensionId ? String(f.extensionId).split(',') : [],
+        browserDirs: f.browserDir ? String(f.browserDir).split(',') : [],
+      });
+      break;
+    }
     case 'connect': {
       const f = flags(rest);
       const { connect } = await import('../src/connect.js');
@@ -72,6 +84,8 @@ async function main() {
       console.log(`browser-feedback ${VERSION} — local companion for Browser Feedback for Coding Agents
 
 Usage:
+  browser-feedback setup [--yes] [--extension-id ID] [--wait SECONDS]
+                                 One-time install on this machine (see INSTALL.md)
   browser-feedback connect [--origin URL] [--name NAME] [--yes] [--extension-id ID]
                                  Connect the project in the current directory
   browser-feedback disconnect    Remove the mapping for the current directory

@@ -9,7 +9,7 @@
 
   const ORIGIN = location.origin;
   const ANN_KEY = `ann:${ORIGIN}`;
-  const CONNECT_CMD = 'npx github:gerasimoph/cws-claude-visual-fix connect';
+  const INSTALL_PROMPT = globalThis.BFOnboarding.installPrompt(chrome.runtime.id);
   const IN_FLIGHT = new Set(['queued', 'working', 'verifying']);
   const CAN_ACCEPT = new Set(['fixed', 'changed_check', 'no_change']);
   const { redactUrl } = globalThis.BFRedact;
@@ -278,7 +278,12 @@
       await send({ type: 'review.cancel', origin: ORIGIN, reviewIds });
       return;
     }
-    if (id === 'copy-connect') { await navigator.clipboard.writeText(CONNECT_CMD).catch(() => {}); ui.toast('Command copied.'); return; }
+    if (id === 'copy-install') { await navigator.clipboard.writeText(INSTALL_PROMPT).catch(() => {}); ui.toast('Copied — paste it into Claude Code.'); return; }
+    if (id.startsWith('connect:')) {
+      const res = await send({ type: 'project.connect', candidateId: id.slice(8), origin: ORIGIN });
+      ui.toast(res?.ok ? `Connected ${location.host} to ${res.project.name}.` : `Couldn't connect: ${res?.error}`);
+      return;
+    }
     if (id.startsWith('add:')) {
       const res = await send({ type: 'project.addOrigin', projectId: id.slice(4), origin: ORIGIN });
       ui.toast(res?.ok ? 'Origin added to the project.' : `Couldn't add origin: ${res?.error}`);
@@ -329,18 +334,26 @@
     return view;
   }
 
+  function shortPath(p) {
+    const parts = String(p || '').split(/[\\/]/).filter(Boolean);
+    return parts.length > 2 ? `…/${parts.slice(-2).join('/')}` : p;
+  }
+
   function baseConnectionView() {
     const p = project();
     const state = companion.state;
     if (state === 'not_installed') {
-      return { kind: 'warn', text: 'Local companion isn\'t installed. Comments still work — copy them as Markdown. To let your agent fix them, run in your project:', command: CONNECT_CMD, actions: [{ id: 'reconnect', label: 'Retry' }] };
+      return { kind: 'warn', text: 'One step left: paste this into Claude Code to let your agent fix comments. Until then, Copy as Markdown works.', command: INSTALL_PROMPT, actions: [{ id: 'copy-install', label: 'Copy' }, { id: 'reconnect', label: 'Retry' }] };
     }
     if (state !== 'connected') {
       return { kind: 'error', text: 'Local companion isn\'t connected. Comments still work — copy them as Markdown.', actions: [{ id: 'reconnect', label: 'Reconnect' }] };
     }
     if (!p) {
-      const others = (companion.projects || []).map((x) => ({ id: `add:${x.id}`, label: `Add ${location.host} to ${x.name}` }));
-      return { kind: 'warn', text: `${location.host} isn't connected to a project. Run in your project directory:`, command: CONNECT_CMD, actions: others };
+      // Agents running in folders that aren't projects yet: the user picks one.
+      const candidates = (companion.candidates || []).map((c) => ({ id: `connect:${c.id}`, label: `Connect to ${c.name} (${shortPath(c.workingDirectory)})` }));
+      if (candidates.length) return { kind: 'warn', text: `Which project is ${location.host}?`, actions: candidates };
+      const others = (companion.projects || []).map((x) => ({ id: `add:${x.id}`, label: `Add to ${x.name}` }));
+      return { kind: 'warn', text: `${location.host} isn't connected to a project yet. Open Claude Code in the project folder and run /ui-review — this panel will offer to connect it.`, actions: others };
     }
     const agent = companion.agents?.[p.id];
     if (agent === 'working') return { kind: 'ok', text: `Connected · ${p.name} · agent working` };
@@ -351,7 +364,18 @@
     return { kind: 'warn', text: 'No agent is waiting for this review. Start your agent and run /ui-review, or copy as Markdown.' };
   }
 
+  // Offer the connection once per page when an agent is waiting in a folder
+  // that isn't a project yet — otherwise the closed panel would hide it.
+  function maybeOfferConnect() {
+    if (prefs.panelOpen || project() || companion.state !== 'connected') return;
+    if (!(companion.candidates || []).some((c) => c.waiting)) return;
+    const offered = prefs.connectOffered || {};
+    if (offered[ORIGIN]) return;
+    setPrefs({ panelOpen: true, connectOffered: { ...offered, [ORIGIN]: Date.now() } });
+  }
+
   function render() {
+    maybeOfferConnect();
     renderPins();
     const items = annotations.map(itemView);
     const inFlight = annotations.filter((a) => IN_FLIGHT.has(a.status));
@@ -370,7 +394,7 @@
       connection: connectionView(),
       items,
       running,
-      fixAllCount: companion.state === 'connected' ? open : 0,
+      fixAllCount: companion.state === 'connected' && project() ? open : 0,
       hasDone: annotations.some((a) => a.status === 'accepted' || a.status === 'no_change'),
     });
     if (openCardId) {
@@ -547,4 +571,5 @@
   });
 
   render();
+  send({ type: 'companion.ensure' });
 })();

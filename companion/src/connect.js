@@ -3,7 +3,6 @@
 // the MCP server with the user's agent. Writes nothing into the project.
 import { createInterface } from 'node:readline/promises';
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { cpSync, rmSync, mkdirSync, writeFileSync, existsSync, chmodSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { HOST_NAME, MCP_SERVER_NAME, DEFAULT_EXTENSION_IDS, VERSION } from './constants.js';
 import { dataDir, files } from './paths.js';
 import { ensureDataDir, loadProjects, saveProjects, normalizeOrigin } from './store.js';
-import { findUp, readPackage, detectFramework, devCommand, portFromScript, runningPorts, COMMON_PORTS, findAgents } from './detect.js';
+import { describeProject, runningPorts, COMMON_PORTS, findAgents } from './detect.js';
 import { slashCommandBody } from './format.js';
 
 const PACKAGE_ROOT = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
@@ -20,17 +19,10 @@ export async function connect(opts) {
   const io = createPrompter(opts);
   try {
     ensureDataDir();
-    const cwd = path.resolve(opts.cwd || process.cwd());
-    const pkgDir = findUp(cwd, 'package.json');
-    const pkg = pkgDir ? readPackage(pkgDir) : null;
-    const gitRoot = findUp(cwd, '.git');
-    const workingDirectory = pkgDir && pkgDir.startsWith(gitRoot || pkgDir) ? pkgDir : cwd;
-    const localPath = gitRoot || workingDirectory;
-    const framework = detectFramework(pkg);
-    const dev = devCommand(pkg, pkgDir || cwd);
-    const name = opts.name || pkg?.name || path.basename(workingDirectory);
-
-    const hinted = portFromScript(dev?.script) || framework.defaultPort;
+    const facts = describeProject(opts.cwd || process.cwd());
+    const { localPath, workingDirectory, id } = facts;
+    const name = opts.name || facts.name;
+    const hinted = facts.defaultPort;
     const candidates = [...new Set([hinted, ...COMMON_PORTS].filter(Boolean))];
     const running = await runningPorts(candidates);
     let origin = opts.origin ? normalizeOrigin(opts.origin) : null;
@@ -47,7 +39,7 @@ export async function connect(opts) {
     io.print(`Project detected:   ${name}`);
     io.print(`Path:               ${localPath}`);
     if (workingDirectory !== localPath) io.print(`Working directory:  ${workingDirectory}`);
-    io.print(`Framework:          ${framework.name || 'unknown'}`);
+    io.print(`Framework:          ${facts.framework || 'unknown'}`);
     io.print(`App:                ${origin}${running.includes(Number(new URL(origin).port)) ? '' : '  (not running right now)'}`);
     io.print(`Agents found:       ${agents.map((a) => a.name).join(', ') || 'none on PATH'}`);
     io.print(`Mode:               Attach — use your own agent session (any MCP agent)`);
@@ -55,14 +47,10 @@ export async function connect(opts) {
     if (!(await io.confirm('Connect this project?', true, { nonInteractive: true }))) { io.print('Cancelled.'); return { cancelled: true }; }
 
     // 1. Runtime + native messaging host
-    const app = installRuntime();
-    const launcher = writeLauncher(app);
-    const extensionIds = [...new Set([...(opts.extensionIds || []), ...DEFAULT_EXTENSION_IDS])];
-    const manifestPaths = installNativeHost(launcher, extensionIds, opts.browserDirs);
+    const { app, manifestPaths } = installMachine(opts);
 
     // 2. Project mapping (stored in the data directory, never in the project)
     const projects = loadProjects();
-    const id = `p_${createHash('sha1').update(workingDirectory).digest('hex').slice(0, 10)}`;
     for (const p of projects) if (p.id !== id) p.origins = (p.origins || []).filter((o) => o !== origin);
     const existing = projects.find((p) => p.id === id);
     const project = {
@@ -72,9 +60,9 @@ export async function connect(opts) {
       localPath,
       workingDirectory,
       origins: [...new Set([origin, ...(existing?.origins || [])])],
-      framework: framework.name,
+      framework: facts.framework,
       agentMode: 'attach',
-      devCommandHint: dev?.command || null,
+      devCommandHint: facts.devCommandHint,
       connectedAt: existing?.connectedAt || new Date().toISOString(),
     };
     saveProjects([...projects.filter((p) => p.id !== id), project]);
@@ -94,10 +82,20 @@ export async function connect(opts) {
     io.print(`  1. Load the extension in Chrome (chrome://extensions → Load unpacked) and open ${origin}`);
     io.print('  2. In your agent session run /ui-review (or ask it to call wait_for_review)');
     io.print('  3. Alt+click elements, write comments, press Fix all');
-    return { project, manifestPaths, launcher };
+    return { project, manifestPaths };
   } finally {
     io.close();
   }
+}
+
+// Machine-level install shared by `setup` and `connect`.
+export function installMachine({ extensionIds = [], browserDirs = [] } = {}) {
+  ensureDataDir();
+  const app = installRuntime();
+  const launcher = writeLauncher(app);
+  const ids = [...new Set([...extensionIds, ...DEFAULT_EXTENSION_IDS])];
+  const manifestPaths = installNativeHost(launcher, ids, browserDirs);
+  return { app, launcher, manifestPaths, mcpCommand: [process.execPath, path.join(app, 'bin', 'browser-feedback.js'), 'mcp'] };
 }
 
 export function installRuntime() {
@@ -180,7 +178,7 @@ export function installNativeHost(launcher, extensionIds, extraDirs = []) {
   return written;
 }
 
-async function registerClaude(io, claudePath, mcpCommand) {
+export async function registerClaude(io, claudePath, mcpCommand) {
   let registered = false;
   try { execFileSync(claudePath, ['mcp', 'get', MCP_SERVER_NAME], { stdio: 'ignore', timeout: 15_000 }); registered = true; } catch {}
   if (registered) {
@@ -201,7 +199,7 @@ async function registerClaude(io, claudePath, mcpCommand) {
   }
 }
 
-function printManualSetup(io, mcpCommand, { hasClaude }) {
+export function printManualSetup(io, mcpCommand, { hasClaude }) {
   const [command, ...args] = mcpCommand;
   io.print('');
   io.print('Other MCP agents — add this server to their config:');
@@ -215,7 +213,7 @@ function printManualSetup(io, mcpCommand, { hasClaude }) {
   if (!hasClaude) io.print(`  Claude Code: claude mcp add --scope user ${MCP_SERVER_NAME} -- ${mcpCommand.map((s) => (/\s/.test(s) ? JSON.stringify(s) : s)).join(' ')}`);
 }
 
-function createPrompter({ yes = false, input = process.stdin, output = process.stdout } = {}) {
+export function createPrompter({ yes = false, input = process.stdin, output = process.stdout } = {}) {
   const interactive = !yes && input.isTTY;
   const rl = interactive ? createInterface({ input, output }) : null;
   return {

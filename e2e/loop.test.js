@@ -3,7 +3,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -57,8 +58,6 @@ test('M0 loop: annotate → Fix all → agent → verify → accept', { timeout:
   const origin = `http://127.0.0.1:${server.address().port}`;
   const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: config, BROWSER_FEEDBACK_HOME: path.join(tmp, 'data') };
 
-  execFileSync(process.execPath, [CLI, 'connect', '--yes', '--skip-agent', '--origin', origin, '--browser-dir', path.join(tmp, 'profile', 'NativeMessagingHosts')], { cwd: project, env, stdio: 'pipe' });
-
   const context = await chromium.launchPersistentContext(path.join(tmp, 'profile'), {
     executablePath: CHROMIUM,
     headless: process.env.HEADED ? false : true,
@@ -88,7 +87,18 @@ test('M0 loop: annotate → Fix all → agent → verify → accept', { timeout:
     }
   };
 
-  await waitFor(async () => (await storage('companion'))?.state === 'connected', 'companion connection');
+  // 0. Onboarding: installing the extension opens the welcome page with the
+  //    one line for Claude Code; the agent runs `setup` (simulated here) and
+  //    the page notices the connection by itself.
+  const welcome = await waitFor(() => context.pages().find((p) => p.url().endsWith('/welcome/welcome.html')), 'welcome page');
+  const prompt = await welcome.locator('#prompt').textContent();
+  assert.match(prompt, /INSTALL\.md/);
+  assert.match(prompt, /--extension-id diidngfppbepogdmihpnfhfekeemedme/);
+  assert.equal((await storage('companion'))?.state, 'not_installed');
+
+  const { stdout } = await promisify(execFile)(process.execPath, [CLI, 'setup', '--yes', '--skip-agent', '--wait', '20', '--extension-id', 'diidngfppbepogdmihpnfhfekeemedme', '--browser-dir', path.join(tmp, 'profile', 'NativeMessagingHosts')], { cwd: home, env });
+  assert.match(stdout, /Browser connected: yes/, stdout);
+  await welcome.locator('#status.ok').waitFor();
 
   const page = await context.newPage();
   await page.goto(`${origin}/`);
@@ -134,10 +144,15 @@ test('M0 loop: annotate → Fix all → agent → verify → accept', { timeout:
   t.after(() => agent.proc.kill());
   await agent.call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'e2e-agent', version: '1' } });
   const waiting = agent.tool('wait_for_review', { timeout_seconds: 60 });
+  // The agent's folder isn't a project yet: the panel asks which one this page is.
+  const connectBtn = page.locator('browser-feedback-root button[data-act="conn"][data-id^="connect:"]');
+  await connectBtn.waitFor();
+  assert.match(await connectBtn.textContent(), /Connect to acme-web/);
+  await connectBtn.click();
   await waitFor(async () => {
     const c = await storage('companion');
-    return Object.values(c?.agents || {}).includes('waiting');
-  }, 'agent waiting status');
+    return Object.values(c?.agents || {}).includes('waiting') && c.projects.some((p) => p.origins.includes(origin));
+  }, 'project connected and agent waiting');
   await page.locator('browser-feedback-root button[data-act="fix-all"]').click();
   const review = await waiting;
   assert.match(review.text, /INSTRUCTION: Make this the same height as the Monthly card/);

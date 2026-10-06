@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Browser Feedback — setup</title>
+  <link rel="stylesheet" href="welcome.css">
+</head>
+<body>
+  <main>
+    <h1>Browser Feedback for Coding Agents</h1>
+    <p class="lead">Leave comments on your running app. Your coding agent fixes them — and the result is checked on the page.</p>
+
+    <ol class="steps">
+      <li class="step done">
+        <span class="mark">✓</span>
+        <div><h2>Extension installed</h2><p class="muted">Comments and Copy as Markdown already work on any localhost page.</p></div>
+      </li>
+      <li class="step" id="step-companion">
+        <span class="mark">2</span>
+        <div>
+          <h2>Paste this into Claude Code</h2>
+          <p class="muted">Any folder works. It installs a small local helper and connects it to your agent. Nothing is added to your project.</p>
+          <div class="prompt"><code id="prompt"></code><button id="copy">Copy</button></div>
+          <p class="status" id="status">Waiting for the local helper…</p>
+        </div>
+      </li>
+      <li class="step" id="step-use">
+        <span class="mark">3</span>
+        <div>
+          <h2>Review your app</h2>
+          <p class="muted">Restart Claude Code in your project folder and run <kbd>/ui-review</kbd>. Open your app on localhost — the review panel asks which project it is.</p>
+          <p class="muted">Then hold <kbd>Alt</kbd>, click an element (<kbd>↑</kbd> selects its parent), write what should change, press <kbd>Enter</kbd>. When you're done, press <strong>Fix all</strong>.</p>
+        </div>
+      </li>
+    </ol>
+    <p class="muted small">Browser context stays on your machine and goes directly to your own coding agent.</p>
+  </main>
+  <script src="../lib/onboarding.js"></script>
+  <script src="welcome.js" type="module"></script>
+</body>
+</html>

@@ -1,6 +1,7 @@
 import net from 'node:net';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 
 export function findUp(start, name) {
   let dir = path.resolve(start);
@@ -97,4 +98,25 @@ export function findExecutable(name) {
 
 export function findAgents() {
   return AGENTS.map(([bin, name]) => ({ bin, name, path: findExecutable(bin) })).filter((a) => a.path);
+}
+
+// Project facts derived from a directory (PRD §13). Used by `connect` and to
+// propose a project for an agent session started in that directory.
+export function describeProject(dir) {
+  const cwd = path.resolve(dir);
+  const pkgDir = findUp(cwd, 'package.json');
+  const pkg = pkgDir ? readPackage(pkgDir) : null;
+  const gitRoot = findUp(cwd, '.git');
+  const workingDirectory = pkgDir && pkgDir.startsWith(gitRoot || pkgDir) ? pkgDir : cwd;
+  const framework = detectFramework(pkg);
+  const dev = devCommand(pkg, pkgDir || cwd);
+  return {
+    id: `p_${createHash('sha1').update(workingDirectory).digest('hex').slice(0, 10)}`,
+    name: pkg?.name || path.basename(workingDirectory),
+    localPath: gitRoot || workingDirectory,
+    workingDirectory,
+    framework: framework.name,
+    defaultPort: portFromScript(dev?.script) || framework.defaultPort,
+    devCommandHint: dev?.command || null,
+  };
 }

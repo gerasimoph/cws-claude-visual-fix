@@ -2,7 +2,7 @@
 // bridge to the local companion (Chrome Native Messaging, PRD §11.1), and
 // the router for page captures and screenshots.
 const HOST_NAME = 'com.browser_feedback.companion';
-const CONTENT_SCRIPTS = ['lib/redact.js', 'content/anchor.js', 'content/capture.js', 'content/ui.js', 'content/main.js'];
+const CONTENT_SCRIPTS = ['lib/redact.js', 'lib/onboarding.js', 'content/anchor.js', 'content/capture.js', 'content/ui.js', 'content/main.js'];
 const DEFAULT_MATCHES = ['http://localhost/*', 'http://127.0.0.1/*', 'https://localhost/*'];
 const IN_FLIGHT = new Set(['queued', 'working', 'verifying']);
 
@@ -86,7 +86,7 @@ let port = null;
 let peer = null;
 let connecting = null;
 const submitting = new Set(); // annotation ids with a review.submit in flight
-let companion = { state: 'disconnected', error: null, version: null, projects: [], agents: {} };
+let companion = { state: 'disconnected', error: null, version: null, projects: [], agents: {}, candidates: [] };
 
 function setCompanion(patch) {
   companion = { ...companion, ...patch };
@@ -116,12 +116,12 @@ function connectCompanion() {
       rpc.close();
       if (port === p) { port = null; peer = null; }
       const notInstalled = /not found|forbidden/i.test(error);
-      setCompanion({ state: notInstalled ? 'not_installed' : 'disconnected', error, agents: {} });
+      setCompanion({ state: notInstalled ? 'not_installed' : 'disconnected', error, agents: {}, candidates: [] });
       if (connecting) { connecting = null; resolve(false); }
     });
     registerCompanionHandlers(rpc);
     rpc.request('hello', { version: chrome.runtime.getManifest().version }, 5000).then(async (hello) => {
-      setCompanion({ state: 'connected', error: null, version: hello.version, projects: hello.projects || [], agents: hello.agents || {} });
+      setCompanion({ state: 'connected', error: null, version: hello.version, projects: hello.projects || [], agents: hello.agents || {}, candidates: hello.candidates || [] });
       for (const review of hello.reviews || []) await applyReview(review);
       connecting = null;
       resolve(true);
@@ -140,7 +140,7 @@ function registerCompanionHandlers(rpc) {
     .handle('page.screenshot', screenshotPage)
     .on('review.update', ({ review }) => applyReview(review))
     .on('projects.changed', ({ projects }) => setCompanion({ projects }))
-    .on('agents.update', ({ agents }) => setCompanion({ agents }));
+    .on('agents.update', ({ agents, candidates }) => setCompanion({ agents, candidates: candidates || [] }));
 }
 
 // Statuses from the companion's journal are authoritative for the review
@@ -320,6 +320,14 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       catch (err) { return { ok: false, error: err.message }; }
     },
     'companion.reconnect': async () => ({ ok: await connectCompanion() }),
+    // Pages and the welcome screen call this; after `setup` the host appears
+    // and the next attempt connects without the user doing anything.
+    'companion.ensure': async () => ({ ok: companion.state === 'connected' || await connectCompanion() }),
+    'project.connect': async () => {
+      if (!(await connectCompanion())) return { ok: false, error: 'companion not connected' };
+      try { return { ok: true, ...(await peer.request('project.connect', { candidateId: msg.candidateId, origin })) }; }
+      catch (err) { return { ok: false, error: err.message }; }
+    },
     'companion.status': async () => companion,
     'metric.observedChange': async () => { peer?.notify('metric.observedChange', { annotationId: msg.annotationId, at: msg.at }); return { ok: true }; },
     'review.cancel': async () => {
@@ -349,7 +357,8 @@ chrome.commands.onCommand.addListener(async (name, tab) => {
 chrome.permissions.onAdded.addListener(syncDynamicScripts);
 chrome.permissions.onRemoved.addListener(syncDynamicScripts);
 
-chrome.runtime.onInstalled.addListener(async () => {
+chrome.runtime.onInstalled.addListener(async ({ reason }) => {
+  if (reason === 'install') chrome.tabs.create({ url: chrome.runtime.getURL('welcome/welcome.html') });
   await syncDynamicScripts();
   // Inject into localhost tabs that were open before install/update.
   const tabs = await chrome.tabs.query({ url: DEFAULT_MATCHES });

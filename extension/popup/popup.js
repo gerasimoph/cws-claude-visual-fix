@@ -1,4 +1,4 @@
-const CONNECT_CMD = 'npx github:gerasimoph/cws-claude-visual-fix connect';
+const INSTALL_PROMPT = globalThis.BFOnboarding.installPrompt(chrome.runtime.id);
 const DEFAULT_ORIGINS = ['http://localhost', 'http://127.0.0.1', 'https://localhost'];
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -52,8 +52,8 @@ async function render() {
     const agent = companion.agents?.[project.id];
     tabEl.innerHTML = `<div><strong>${esc(project.name)}</strong> <span class="muted">${esc(origin)}</span></div><div class="muted">${agent === 'waiting' ? 'Agent waiting for Fix all' : agent === 'working' ? 'Agent working' : 'No agent attached — run /ui-review in your agent'}</div>`;
   } else {
-    tabEl.innerHTML = `<div><strong>Project not connected</strong> <span class="muted">${esc(origin)}</span></div><div class="muted">Connect to let your agent fix comments:</div><code>${esc(CONNECT_CMD)}</code>`;
-    tabEl.querySelector('code').after(copyButton(CONNECT_CMD));
+    const waiting = (companion.candidates || []).length;
+    tabEl.innerHTML = `<div><strong>Project not connected</strong> <span class="muted">${esc(origin)}</span></div><div class="muted">${waiting ? 'Your agent is running — confirm the project in the review panel on the page.' : 'Open Claude Code in the project folder and run /ui-review; the review panel will offer to connect this page.'}</div>`;
   }
   $('select').disabled = !enabled;
   $('panel').disabled = !enabled;
@@ -62,7 +62,8 @@ async function render() {
   const comp = $('companion');
   if (companion.state === 'connected') comp.innerHTML = '';
   else if (companion.state === 'not_installed') {
-    comp.innerHTML = `<div>Local companion isn't installed.</div><div class="muted">Comments and Copy as Markdown work without it. To let your agent fix comments, run in your project:</div><code>${esc(CONNECT_CMD)}</code><button id="retry">Retry</button>`;
+    comp.innerHTML = `<div><strong>One step left</strong></div><div class="muted">Paste this into Claude Code — it installs the local companion. Comments and Copy as Markdown already work.</div><code>${esc(INSTALL_PROMPT)}</code><button id="retry">Retry</button> <a href="../welcome/welcome.html" target="_blank">Setup guide</a>`;
+    comp.querySelector('code').after(copyButton(INSTALL_PROMPT));
   } else {
     comp.innerHTML = `<div>Local companion isn't connected.</div><div class="muted">${esc(companion.error || '')}</div><button id="retry">Reconnect</button>`;
   }

@@ -12,32 +12,24 @@ Chrome extension ──Native Messaging──▶ companion host ◀──unix so
 - **companion/** — Node ≥ 18, без зависимостей. `host` (запускает Chrome), `mcp` (запускает агент), `connect`, `status`, `stats`.
 - **shared/redact.js** — фильтрация секретов, копируется в обе части (`npm run sync-shared`).
 
-## Быстрый старт (dev)
+## Установка
 
-```bash
-# 1. Extension: chrome://extensions → Developer mode → Load unpacked → папка extension/
-#    ID фиксирован ключом в manifest.json: diidngfppbepogdmihpnfhfekeemedme
+1. **Расширение.** Сейчас: `chrome://extensions` → Developer mode → Load unpacked → папка `extension/` (ID фиксирован ключом в manifest: `diidngfppbepogdmihpnfhfekeemedme`). Потом — Chrome Web Store.
+2. **Одна фраза для Claude Code.** При установке открывается страница-приветствие с фразой и кнопкой Copy (она же есть в popup и в панели). Пользователь вставляет её в Claude Code. Агент читает [`INSTALL.md`](INSTALL.md) и запускает:
+   ```bash
+   npx -y github:gerasimoph/cws-claude-visual-fix setup --yes --extension-id <id>
+   ```
+   `setup` ставит всё на уровне машины: companion в `~/.browser-feedback`, native host для Chrome/Chromium/Brave/Edge, MCP-сервер `browser-feedback` в Claude Code (user scope) и `/ui-review`. Затем ждёт, пока расширение подключится: страница-приветствие сама переключается в «connected».
+3. **Проект подключается из браузера.** Claude Code перезапускается в папке проекта, там выполняется `/ui-review`. Панель на `localhost` спрашивает «Which project is localhost:5173? — Connect to acme-web». Это подтверждение по PRD §14.3, только в браузере вместо терминала.
+4. ⌥/Alt+клик (↑ — родитель) → текст → Enter, затем **Fix all**. Pins: Queued → Working → Verifying → Fixed / Changed — check / Failed → Accept.
 
-# 2. На СВОЕЙ машине (там же, где Chrome), в директории вашего проекта:
-npx github:gerasimoph/cws-claude-visual-fix connect
-#    репозиторий приватный: нужен доступ git к GitHub (SSH-ключ или gh auth login)
-#    или из клона: node /path/to/repo/companion/bin/browser-feedback.js connect
-```
-
-> Пакета `browser-feedback` в npm нет — `npx browser-feedback connect` вернёт 404.
-> Запускать `connect` в облачной сессии бессмысленно: native host ставится рядом с Chrome.
-
-`connect` определяет проект, framework и запущенный порт, копирует companion в `~/.browser-feedback/app`, ставит native messaging host для Chrome/Chromium/Brave/Edge и (с подтверждением) регистрирует MCP-сервер в Claude Code на уровне пользователя + команду `/ui-review`. Для других агентов печатает конфиг (для Codex — с `tool_timeout_sec`). **В проект не пишется ни одного файла.**
-
-3. В сессии агента: `/ui-review` (или «call wait_for_review»). Агент блокируется до Fix all.
-4. На странице: зажать ⌥/Alt, навести, ↑ — выбрать родителя, клик → текст → Enter. ⌘/Ctrl+Enter — отправить сразу.
-5. **Fix all** в панели. Pins: Queued → Working → Verifying → Fixed / Changed — check / Failed → Accept.
+**В проект не пишется ни одного файла.** Пакета `browser-feedback` в npm нет, `npx` работает из GitHub (репозиторий приватный — нужен git-доступ). `setup` нужно запускать на машине с Chrome, не в облачной сессии. Ручной путь для одного проекта остаётся: `browser-feedback connect`.
 
 ## Тесты
 
 ```bash
 npm install          # playwright-core для e2e
-npm test             # unit + интеграция реальных процессов host ↔ MCP (24 теста)
+npm test             # unit + интеграция реальных процессов host ↔ MCP (25 тестов)
 npm run test:e2e     # полный цикл в настоящем Chromium с расширением и native host
 ```
 

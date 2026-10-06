@@ -6,7 +6,7 @@ import { Companion } from '../src/companion.js';
 
 let companion, ext, agent, page, fx;
 
-beforeEach(() => {
+beforeEach(async () => {
   tempHome();
   saveProjects([{ id: 'p1', name: 'AudioMoo', localPath: '/proj', workingDirectory: '/proj', origins: ['http://localhost:3000'], framework: 'Next.js' }]);
   companion = new Companion();
@@ -18,6 +18,7 @@ beforeEach(() => {
   const [agentSide, hostAgentSide] = peerPair();
   companion.attachAgent(hostAgentSide);
   agent = agentSide;
+  await agent.request('hello', { cwd: '/proj' });
 });
 
 async function submit(items) {
@@ -108,6 +109,7 @@ test('one running review per project; next one waits', async () => {
   const r2 = await submit([annotationInput('b1', 'y')]);
   const [agent2Side, host2Side] = peerPair();
   companion.attachAgent(host2Side);
+  await agent2Side.request('hello', { cwd: '/proj' });
   const res = await agent2Side.request('waitForReview', { timeoutMs: 1000 });
   assert.equal(res.review, null, 'second agent must not get a review while one is running');
   page.set('a1', signature({ text: 'new' }));
@@ -132,9 +134,31 @@ test('agent disconnect leaves the review resumable by the next agent', async () 
   await submit([annotationInput('a1', 'x')]);
   const [a1Side, h1Side] = peerPair();
   const s1 = companion.attachAgent(h1Side);
+  await a1Side.request('hello', { cwd: '/proj' });
   await a1Side.request('waitForReview', { timeoutMs: 1000 });
   await a1Side.request('getAnnotation', { id: 'a1' });
   companion.detachAgent(s1);
   const res = await agent.request('waitForReview', { timeoutMs: 1000 });
   assert.match(res.text, /Resuming/);
+});
+
+test('agent in an unknown folder is offered to the browser and connected there', async () => {
+  const [a2, h2] = peerPair();
+  companion.attachAgent(h2);
+  const hello = await a2.request('hello', { cwd: '/code/acme-web' });
+  assert.equal(hello.project, null);
+  const waiting = a2.request('waitForReview', { timeoutMs: 5000 });
+  await tick();
+  const ext1 = await ext.request('hello', {});
+  const cand = ext1.candidates.find((c) => c.workingDirectory === '/code/acme-web');
+  assert.ok(cand && cand.waiting, 'candidate is listed and waiting');
+  assert.equal(ext1.agents.p1, undefined, 'unmapped agents do not count as waiting for other projects');
+
+  const { project } = await ext.request('project.connect', { candidateId: cand.id, origin: 'http://localhost:5173/x' });
+  assert.deepEqual(project.origins, ['http://localhost:5173']);
+  for (const a of [annotationInput('c1', 'x')]) page.set(a.id, signature());
+  await ext.request('review.submit', { origin: 'http://localhost:5173', annotations: [annotationInput('c1', 'x')] });
+  const got = await waiting;
+  assert.equal(got.review.count, 1);
+  assert.match(got.text, /acme-web/);
 });
