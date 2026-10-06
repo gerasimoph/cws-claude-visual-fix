@@ -18,10 +18,14 @@ Chrome extension ──Native Messaging──▶ companion host ◀──unix so
 # 1. Extension: chrome://extensions → Developer mode → Load unpacked → папка extension/
 #    ID фиксирован ключом в manifest.json: diidngfppbepogdmihpnfhfekeemedme
 
-# 2. В директории вашего проекта (dev server уже запущен):
-node /path/to/repo/companion/bin/browser-feedback.js connect
-#    (после публикации в npm: npx browser-feedback connect)
+# 2. На СВОЕЙ машине (там же, где Chrome), в директории вашего проекта:
+npx github:gerasimoph/cws-claude-visual-fix connect
+#    репозиторий приватный: нужен доступ git к GitHub (SSH-ключ или gh auth login)
+#    или из клона: node /path/to/repo/companion/bin/browser-feedback.js connect
 ```
+
+> Пакета `browser-feedback` в npm нет — `npx browser-feedback connect` вернёт 404.
+> Запускать `connect` в облачной сессии бессмысленно: native host ставится рядом с Chrome.
 
 `connect` определяет проект, framework и запущенный порт, копирует companion в `~/.browser-feedback/app`, ставит native messaging host для Chrome/Chromium/Brave/Edge и (с подтверждением) регистрирует MCP-сервер в Claude Code на уровне пользователя + команду `/ui-review`. Для других агентов печатает конфиг (для Codex — с `tool_timeout_sec`). **В проект не пишется ни одного файла.**
 

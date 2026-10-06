@@ -9,7 +9,7 @@
 
   const ORIGIN = location.origin;
   const ANN_KEY = `ann:${ORIGIN}`;
-  const CONNECT_CMD = 'npx browser-feedback connect';
+  const CONNECT_CMD = 'npx github:gerasimoph/cws-claude-visual-fix connect';
   const IN_FLIGHT = new Set(['queued', 'working', 'verifying']);
   const CAN_ACCEPT = new Set(['fixed', 'changed_check', 'no_change']);
   const { redactUrl } = globalThis.BFRedact;

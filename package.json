@@ -2,8 +2,16 @@
   "name": "browser-feedback-workspace",
   "private": true,
   "version": "0.1.0",
-  "description": "Browser Feedback for Coding Agents — Chrome extension + local companion (M0 validation prototype).",
+  "description": "Browser Feedback for Coding Agents \u2014 Chrome extension + local companion (M0 validation prototype).",
   "type": "module",
+  "bin": {
+    "browser-feedback": "companion/bin/browser-feedback.js"
+  },
+  "files": [
+    "companion/bin",
+    "companion/src",
+    "companion/package.json"
+  ],
   "scripts": {
     "sync-shared": "node scripts/sync-shared.mjs",
     "check-shared": "node scripts/sync-shared.mjs --check",

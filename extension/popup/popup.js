@@ -1,4 +1,4 @@
-const CONNECT_CMD = 'npx browser-feedback connect';
+const CONNECT_CMD = 'npx github:gerasimoph/cws-claude-visual-fix connect';
 const DEFAULT_ORIGINS = ['http://localhost', 'http://127.0.0.1', 'https://localhost'];
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
