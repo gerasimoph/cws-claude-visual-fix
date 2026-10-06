@@ -1,0 +1,17 @@
+{
+  "name": "browser-feedback-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Browser Feedback for Coding Agents — Chrome extension + local companion (M0 validation prototype).",
+  "type": "module",
+  "scripts": {
+    "sync-shared": "node scripts/sync-shared.mjs",
+    "check-shared": "node scripts/sync-shared.mjs --check",
+    "extension-id": "node scripts/extension-id.mjs",
+    "test": "npm run check-shared && node --test \"companion/test/*.test.js\"",
+    "test:e2e": "node --test \"e2e/*.test.js\""
+  },
+  "devDependencies": {
+    "playwright-core": "1.56.1"
+  }
+}
