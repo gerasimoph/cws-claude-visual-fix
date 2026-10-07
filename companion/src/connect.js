@@ -3,7 +3,7 @@
 // the MCP server with the user's agent. Writes nothing into the project.
 import { createInterface } from 'node:readline/promises';
 import { execFileSync } from 'node:child_process';
-import { cpSync, rmSync, mkdirSync, writeFileSync, existsSync, chmodSync } from 'node:fs';
+import { cpSync, rmSync, mkdirSync, writeFileSync, existsSync, chmodSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,7 @@ import { dataDir, files } from './paths.js';
 import { ensureDataDir, loadProjects, saveProjects, normalizeOrigin } from './store.js';
 import { describeProject, runningPorts, COMMON_PORTS, findAgents } from './detect.js';
 import { slashCommandBody } from './format.js';
+import { claudeDir, installHooks, writeSlashCommand } from './claude-config.js';
 
 const PACKAGE_ROOT = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 
@@ -74,7 +75,7 @@ export async function connect(opts) {
     // 3. Agent registration (user-level, with confirmation)
     const mcpCommand = [process.execPath, path.join(app, 'bin', 'browser-feedback.js'), 'mcp'];
     const claude = agents.find((a) => a.bin === 'claude');
-    if (claude && !opts.skipAgent) await registerClaude(io, claude.path, mcpCommand);
+    if (claude && !opts.skipAgent) await registerClaude(io, claude.path, mcpCommand, { hooks: !opts.noHooks });
     printManualSetup(io, mcpCommand, { hasClaude: !!claude });
 
     io.print('');
@@ -178,7 +179,7 @@ export function installNativeHost(launcher, extensionIds, extraDirs = []) {
   return written;
 }
 
-export async function registerClaude(io, claudePath, mcpCommand) {
+export async function registerClaude(io, claudePath, mcpCommand, { hooks = true } = {}) {
   let registered = false;
   try { execFileSync(claudePath, ['mcp', 'get', MCP_SERVER_NAME], { stdio: 'ignore', timeout: 15_000 }); registered = true; } catch {}
   if (registered) {
@@ -191,11 +192,20 @@ export async function registerClaude(io, claudePath, mcpCommand) {
       io.print(`! Could not run claude mcp add: ${err.message}`);
     }
   }
-  const commandFile = path.join(os.homedir(), '.claude', 'commands', 'ui-review.md');
-  if (!existsSync(commandFile) && await io.confirm(`Add the /ui-review command to Claude Code (${commandFile})?`, true)) {
-    mkdirSync(path.dirname(commandFile), { recursive: true });
-    writeFileSync(commandFile, slashCommandBody());
-    io.print(`✓ Claude Code       /ui-review command added`);
+  // /ui-review: ours is replaced on update; a user's own file of that name is left alone.
+  const commandFile = path.join(claudeDir(), 'commands', 'ui-review.md');
+  const ours = !existsSync(commandFile) || readFileSync(commandFile, 'utf8').includes(MCP_SERVER_NAME);
+  if (ours && (existsSync(commandFile) || await io.confirm(`Add the /ui-review command to Claude Code (${commandFile})?`, true))) {
+    writeSlashCommand(slashCommandBody(), commandFile);
+    io.print('✓ Claude Code       /ui-review command');
+  }
+  if (hooks && process.platform !== 'win32' && await io.confirm(`Install the Fix all doorbell hooks in ${path.join(claudeDir(), 'settings.json')} (a backup is kept)?`, true)) {
+    try {
+      installHooks({ nodePath: mcpCommand[0], entry: mcpCommand[1] });
+      io.print('✓ Claude Code       doorbell hooks: Fix all wakes your Claude Code session, no /ui-review needed');
+    } catch (err) {
+      io.print(`! Hooks not installed: ${err.message}`);
+    }
   }
 }
 

@@ -10,7 +10,8 @@ import {
 } from './store.js';
 import { runChecks, decideStatus, explainStatus, compareSignatures } from './verify.js';
 import { describeProject } from './detect.js';
-import { formatReviewForAgent, formatAnnotationFull, formatInspection, formatReportResult } from './format.js';
+import { devServerFor, foldersRelated } from './devserver.js';
+import { formatReviewForAgent, formatAnnotationFull, formatInspection, formatReportResult, ringText, CLAIM_MARKER } from './format.js';
 import { log } from './log.js';
 
 const { redactDeep, redactText } = globalThis.BFRedact;
@@ -19,6 +20,9 @@ const MAX_ANNOTATIONS = 50;
 const MAX_INSTRUCTION = 4000;
 const CAPTURE_TIMEOUT_MS = 20_000;
 const AGENT_REPORT_STATUSES = new Set(['fixed', 'no_change', 'failed']);
+const BUSY_STALE_MS = 15 * 60_000; // a missed Stop hook must not block rings forever
+const CHAT_FORGET_MS = 24 * 3600_000;
+const MAX_RINGS = 3;
 
 export function newId(prefix) {
   return `${prefix}${randomBytes(4).toString('hex')}`;
@@ -33,6 +37,8 @@ export class Companion {
     this.extension = null; // RpcPeer
     this.sessions = new Map(); // agent session id -> session
     this.waiters = []; // { session, resolve, timer }
+    this.chats = new Map(); // Claude Code session id -> chat known via doorbell hooks
+    this.devServers = {}; // projectId -> { origin, dir } | null
   }
 
   // ---------------------------------------------------------------- extension
@@ -47,6 +53,7 @@ export class Companion {
       .handle('review.submit', (p) => this.submitReview(p))
       .handle('review.cancel', (p) => this.cancelReview(p))
       .handle('annotation.accept', (p) => this.acceptAnnotation(p))
+      .handle('review.ringNow', (p) => this.ringNow(p))
       .onNotification('metric.observedChange', (p) => this.observedChange(p));
   }
 
@@ -57,6 +64,8 @@ export class Companion {
       reviews: [...this.reviews.values()].map((r) => this.compactReview(r)),
       agents: this.agentStatus(),
       candidates: this.candidates(),
+      chats: this.chatList(),
+      devServers: this.devServers,
     };
   }
 
@@ -88,8 +97,8 @@ export class Companion {
   connectProject({ candidateId, origin }) {
     const o = normalizeOrigin(origin);
     if (!o) throw new Error('Invalid origin');
-    const sessions = [...this.sessions.values()].filter((s) => s.candidate?.id === candidateId);
-    if (!sessions.length) throw new Error('That agent session is gone — restart it in the project folder');
+    const sessions = [...this.sessions.values(), ...this.chats.values()].filter((s) => s.candidate?.id === candidateId);
+    if (!sessions.length) throw new Error('That Claude Code session is gone — open it again in the project folder');
     const { defaultPort, ...facts } = sessions[0].candidate;
     const projects = this.reloadProjects();
     for (const p of projects) p.origins = (p.origins || []).filter((x) => x !== o);
@@ -108,11 +117,20 @@ export class Companion {
     recordMetric('project_connected', { framework: project.framework || null, via: 'browser' });
     this.notifyProjectsChanged();
     this.pushAgents();
+    this.pushChats();
     this.dispatch(project.id);
     return { project };
   }
 
-  submitReview({ origin, annotations }) {
+  ringNow({ reviewId }) {
+    const review = this.reviews.get(reviewId);
+    if (!review || review.status !== 'pending') return { ok: false };
+    review.force = true;
+    this.dispatch(review.projectId);
+    return { ok: true };
+  }
+
+  submitReview({ origin, annotations, targetChatId }) {
     const o = normalizeOrigin(origin);
     const project = findProjectByOrigin(this.reloadProjects(), o);
     if (!project) {
@@ -129,6 +147,7 @@ export class Companion {
       origin: o,
       status: 'pending',
       createdAt: Date.now(),
+      targetChatId: typeof targetChatId === 'string' ? targetChatId : null,
       annotations: annotations.map((a, i) => this.importAnnotation(a, i)),
     };
     for (const a of review.annotations) {
@@ -139,10 +158,10 @@ export class Companion {
     this.save(review);
     recordMetric('review_submitted', { annotations_in_review: review.annotations.length, framework: project.framework || null, agent_mode: 'attach' });
 
-    const agentWaiting = this.waiters.some((w) => this.waiterMatches(w, project.id));
     this.pushReview(review);
     this.dispatch(project.id);
-    return { reviewId: review.id, agentWaiting, review: this.compactReview(review) };
+    const agentWaiting = review.status === 'running' || !!review.ringedAt || this.waiters.some((w) => this.waiterMatches(w, project.id));
+    return { reviewId: review.id, agentWaiting, chatId: review.chatId || null, review: this.compactReview(review) };
   }
 
   importAnnotation(a, index) {
@@ -263,7 +282,15 @@ export class Companion {
     return w.session.projectId === projectId;
   }
 
-  async waitForReview(session, { timeoutMs = 300_000 } = {}) {
+  async waitForReview(session, { timeoutMs = 300_000, reviewId } = {}) {
+    // A chat woken by the doorbell asks for the review it was rung for.
+    if (reviewId) {
+      const rung = this.reviews.get(reviewId);
+      if (!rung) throw new Error(`Unknown review ${reviewId}`);
+      if (rung.status === 'pending') { rung.deliveredVia = 'ring'; return this.assign(rung, session); }
+      if (rung.status === 'running') return this.assign(rung, session, { resumed: true });
+      return { review: null, text: `Review ${reviewId} is already finished.` };
+    }
     const current = this.sessionReview(session);
     if (current && current.status === 'running') {
       // A review the agent never touched was probably lost (cancelled or timed-out
@@ -307,18 +334,166 @@ export class Companion {
 
   dispatch(projectId) {
     if ([...this.reviews.values()].some((r) => r.status === 'running' && r.projectId === projectId)) return;
-    const waiter = this.waiters.find((w) => this.waiterMatches(w, projectId));
-    if (!waiter) return;
-    const review = this.nextPendingReview(waiter.session);
+    const review = [...this.reviews.values()]
+      .filter((r) => r.status === 'pending' && r.projectId === projectId)
+      .sort((a, b) => a.createdAt - b.createdAt)[0];
     if (!review) return;
-    this.waiters = this.waiters.filter((w) => w !== waiter);
-    clearTimeout(waiter.timer);
-    this.assign(review, waiter.session).then(waiter.resolve, (err) => waiter.resolve({ review: null, text: `Error: ${err.message}` }));
+    // 1. An agent blocked in wait_for_review (/ui-review loop, or agents without hooks).
+    const waiter = this.waiters.find((w) => this.waiterMatches(w, projectId));
+    if (waiter && !review.targetChatId) {
+      this.waiters = this.waiters.filter((w) => w !== waiter);
+      clearTimeout(waiter.timer);
+      review.deliveredVia = 'wait';
+      this.assign(review, waiter.session).then(waiter.resolve, (err) => waiter.resolve({ review: null, text: `Error: ${err.message}` }));
+      return;
+    }
+    // 2. Ring the chosen Claude Code chat.
+    this.ringChat(review);
+  }
+
+  // ------------------------------------------------------------------- chats
+  // Claude Code chats announce themselves through the doorbell hook. Fix all
+  // goes to one chat: the one picked in the panel, else the one that ran
+  // /ui-review, else one working in the dev server's folder, else the most
+  // recently active one in the project.
+
+  attachDoorbell(peer) {
+    peer
+      .handle('bell.register', (p) => this.registerBell(peer, p))
+      .handle('bell.end', (p) => this.endChat(p));
+  }
+
+  registerBell(peer, { sessionId, cwd, title, event, prompt }) {
+    if (typeof sessionId !== 'string' || !sessionId) throw new Error('sessionId required');
+    const now = Date.now();
+    let chat = this.chats.get(sessionId);
+    if (!chat) {
+      chat = { id: sessionId, cwd: null, title: null, projectId: null, candidate: null, busy: false, busySince: 0, claimed: false, bell: null, startedAt: now, rings: 0 };
+      this.chats.set(sessionId, chat);
+    }
+    if (typeof cwd === 'string' && cwd !== chat.cwd) {
+      chat.cwd = cwd;
+      const project = findProjectByDirectory(this.reloadProjects(), cwd);
+      chat.projectId = project?.id || null;
+      chat.candidate = project ? null : describeProject(cwd);
+    }
+    if (title) chat.title = String(title).slice(0, 80);
+    chat.lastActiveAt = now;
+    if (event === 'UserPromptSubmit') {
+      chat.busy = true;
+      chat.busySince = now;
+      if (prompt && (/^\s*\/ui-review\b/.test(prompt) || prompt.includes(CLAIM_MARKER))) this.claimChat(chat);
+    } else {
+      chat.busy = false;
+    }
+    if (chat.bell) chat.bell.resolve({ action: 'stop' }); // a newer doorbell replaces it
+    const result = new Promise((resolve) => { chat.bell = { resolve, peer }; });
+    peer.onClose = () => { if (chat.bell?.peer === peer) { chat.bell = null; this.pushChats(); } };
+    if (chat.projectId) this.dispatch(chat.projectId);
+    this.pushChats();
+    return result;
+  }
+
+  endChat({ sessionId }) {
+    const chat = this.chats.get(sessionId);
+    if (chat) {
+      chat.bell?.resolve({ action: 'stop' });
+      this.chats.delete(sessionId);
+      this.pushChats();
+    }
+    return { ok: true };
+  }
+
+  claimChat(chat) {
+    for (const c of this.chats.values()) if (c.projectId === chat.projectId) c.claimed = false;
+    chat.claimed = true;
+  }
+
+  isBusy(chat) {
+    return chat.busy && Date.now() - chat.busySince < BUSY_STALE_MS;
+  }
+
+  chatsFor(projectId) {
+    const now = Date.now();
+    for (const [id, c] of this.chats) if (!c.bell && now - c.lastActiveAt > CHAT_FORGET_MS) this.chats.delete(id);
+    return [...this.chats.values()].filter((c) => c.projectId === projectId);
+  }
+
+  pickChat(projectId, targetChatId) {
+    const chats = this.chatsFor(projectId);
+    if (!chats.length) return null;
+    if (targetChatId) {
+      const target = chats.find((c) => c.id === targetChatId);
+      if (target) return target;
+    }
+    const claimed = chats.find((c) => c.claimed);
+    if (claimed) return claimed;
+    const dev = this.devServers[projectId]?.dir;
+    const pool = dev ? chats.filter((c) => foldersRelated(c.cwd, dev)) : [];
+    return (pool.length ? pool : chats).sort((a, b) => b.lastActiveAt - a.lastActiveAt)[0];
+  }
+
+  ringChat(review) {
+    const chat = (review.chatId && this.chats.get(review.chatId)) || this.pickChat(review.projectId, review.targetChatId);
+    if (!chat) { review.waitingFor = 'no_chat'; this.pushReview(review); return; }
+    review.chatId = chat.id;
+    if (!chat.bell) { review.waitingFor = 'chat_offline'; this.pushReview(review); return; }
+    if (this.isBusy(chat) && !review.force) { review.waitingFor = 'chat_busy'; this.pushReview(review); return; }
+    if ((review.rings || 0) >= MAX_RINGS) { review.waitingFor = 'not_picked_up'; this.pushReview(review); return; }
+    const project = this.projects.find((p) => p.id === review.projectId);
+    chat.bell.resolve({ action: 'ring', text: ringText(review, project) });
+    chat.bell = null;
+    review.rings = (review.rings || 0) + 1;
+    review.ringedAt = Date.now();
+    review.waitingFor = 'pickup';
+    recordMetric('review_rung', { busy_forced: !!review.force });
+    this.save(review);
+    this.pushReview(review);
+    this.pushChats();
+  }
+
+  chatList() {
+    return [...this.chats.values()].map((c) => ({
+      id: c.id,
+      title: c.title,
+      cwd: c.cwd,
+      projectId: c.projectId,
+      candidateId: c.candidate?.id || null,
+      lastActiveAt: c.lastActiveAt,
+      busy: this.isBusy(c),
+      online: !!c.bell,
+      claimed: c.claimed,
+    }));
+  }
+
+  async refreshDevServers() {
+    const next = {};
+    for (const p of this.projects) {
+      for (const origin of p.origins || []) {
+        const found = await devServerFor(origin);
+        if (found) { next[p.id] = { origin, dir: found.dir }; break; }
+      }
+      next[p.id] ||= null;
+    }
+    this.devServers = next;
+    return next;
+  }
+
+  pushChats() {
+    if (!this.extension) return;
+    this.extension.notify('chats.update', { chats: this.chatList(), devServers: this.devServers, candidates: this.candidates() });
+    clearTimeout(this._devTimer);
+    this._devTimer = setTimeout(async () => {
+      const before = JSON.stringify(this.devServers);
+      await this.refreshDevServers().catch(() => {});
+      if (JSON.stringify(this.devServers) !== before) this.extension?.notify('chats.update', { chats: this.chatList(), devServers: this.devServers, candidates: this.candidates() });
+    }, 50);
   }
 
   async assign(review, session, { resumed = false } = {}) {
     review.status = 'running';
     review.assignedAt ||= Date.now();
+    review.waitingFor = null;
     session.reviewId = review.id;
     const missing = review.annotations.filter((a) => !a.baseline && !FINAL_STATUSES.has(a.status));
     if (missing.length) await this.captureBaselines(review, missing);
@@ -330,7 +505,7 @@ export class Companion {
     const project = this.projects.find((p) => p.id === review.projectId);
     const open = { ...review, annotations: review.annotations.filter((a) => !FINAL_STATUSES.has(a.status)) };
     const header = resumed ? 'Resuming an unfinished review. Comments already reported are not listed.\n\n' : '';
-    return { review: { id: review.id, count: open.annotations.length }, text: header + formatReviewForAgent(open, project) };
+    return { review: { id: review.id, count: open.annotations.length }, text: header + formatReviewForAgent(open, project, { via: review.deliveredVia }) };
   }
 
   sessionReview(session) {
@@ -430,7 +605,7 @@ export class Companion {
 
     return {
       status: final,
-      text: formatReportResult(annotation, { status: final, checks: result.checks, diffs: result.diffs, agentObservedChange: annotation.agentObservedChange, next }),
+      text: formatReportResult(annotation, { status: final, checks: result.checks, diffs: result.diffs, agentObservedChange: annotation.agentObservedChange, next, via: review.deliveredVia }),
     };
   }
 
@@ -558,6 +733,9 @@ export class Companion {
       projectId: review.projectId,
       origin: review.origin,
       status: review.status,
+      chatId: review.chatId || null,
+      waitingFor: review.waitingFor || null,
+      deliveredVia: review.deliveredVia || null,
       annotations: review.annotations.map((a) => ({
         id: a.id,
         status: a.status,
@@ -589,9 +767,9 @@ export class Companion {
 
   candidates() {
     const out = new Map();
-    for (const s of this.sessions.values()) {
+    for (const s of [...this.sessions.values(), ...this.chats.values()]) {
       if (!s.candidate) continue;
-      const waiting = this.waiters.some((w) => w.session === s);
+      const waiting = this.waiters.some((w) => w.session === s) || !!s.bell;
       const prev = out.get(s.candidate.id);
       out.set(s.candidate.id, { ...s.candidate, waiting: waiting || !!prev?.waiting });
     }

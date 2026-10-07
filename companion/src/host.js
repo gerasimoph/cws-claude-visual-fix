@@ -53,8 +53,10 @@ export async function listenAgentSocket(companion, path = socketPath()) {
   }
   const server = net.createServer((socket) => {
     const peer = new RpcPeer(attachJsonLines(socket, (msg) => peer.receive(msg)), { name: 'agent', defaultTimeoutMs: 0 });
+    // The same local socket serves MCP processes and doorbell hooks.
     const session = companion.attachAgent(peer);
-    const close = () => { peer.close('disconnected'); companion.detachAgent(session); };
+    companion.attachDoorbell(peer);
+    const close = () => { peer.close('disconnected'); companion.detachAgent(session); peer.onClose?.(); };
     socket.on('close', close);
     socket.on('error', close);
   });

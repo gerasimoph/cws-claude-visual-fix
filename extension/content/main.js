@@ -205,12 +205,14 @@
   async function fixAll(ids) {
     const targets = ids || annotations.filter((a) => a.status === 'open').map((a) => a.id);
     if (!targets.length) return;
-    const res = await send({ type: 'review.submit', origin: ORIGIN, ids: targets });
+    const res = await send({ type: 'review.submit', origin: ORIGIN, ids: targets, targetChatId: (prefs.targets || {})[ORIGIN] || null });
     if (!res?.ok) {
       ui.toast(res?.code === 'project_not_connected' ? 'This localhost isn\'t connected to a project yet.' : `Couldn't send the review: ${res?.error || 'companion not connected'}. You can Copy as Markdown instead.`, 5000);
       return;
     }
-    ui.toast(res.agentWaiting ? `Sent ${targets.length} comment${targets.length === 1 ? '' : 's'} to your agent.` : 'Queued. No agent is waiting — run /ui-review in your agent session.', res.agentWaiting ? 2600 : 6000);
+    const chat = (companion.chats || []).find((c) => c.id === res.chatId);
+    const n = `${targets.length} comment${targets.length === 1 ? '' : 's'}`;
+    ui.toast(res.agentWaiting ? `Sent ${n} to ${chat ? `«${chatName(chat)}»` : 'your agent'}.` : chat ? `Queued for «${chatName(chat)}».` : 'Queued — open Claude Code in the project folder to start.', res.agentWaiting ? 2600 : 5000);
   }
 
   async function copyMarkdown() {
@@ -267,12 +269,18 @@
       case 'panel:close': return setPrefs({ panelOpen: false });
       case 'panel:collapse': return setPrefs({ collapsed: !prefs.collapsed });
       case 'conn:action': return connAction(data.id);
+      case 'target:change': return setPrefs({ targets: { ...(prefs.targets || {}), [ORIGIN]: data.id || null } });
       default:
     }
   }
 
   async function connAction(id) {
     if (id === 'reconnect') { await send({ type: 'companion.reconnect' }); return; }
+    if (id === 'ring-now') {
+      const reviewIds = [...new Set(annotations.filter((a) => IN_FLIGHT.has(a.status)).map((a) => a.reviewId))];
+      await send({ type: 'review.ringNow', origin: ORIGIN, reviewIds });
+      return;
+    }
     if (id === 'cancel-review') {
       const reviewIds = [...new Set(annotations.filter((a) => IN_FLIGHT.has(a.status)).map((a) => a.reviewId))];
       await send({ type: 'review.cancel', origin: ORIGIN, reviewIds });
@@ -334,6 +342,75 @@
     return view;
   }
 
+  // Where an in-flight review is and what the user can do about it.
+  function reviewStateView(a, agent) {
+    const info = a.reviewInfo || {};
+    const chat = (companion.chats || []).find((c) => c.id === info.chatId);
+    const name = chat ? `«${chatName(chat)}»` : 'the session';
+    const cancel = { id: 'cancel-review', label: 'Cancel review' };
+    if (info.status === 'running' || agent === 'working') return { kind: 'ok', text: chat ? `Claude is working in ${name}` : 'Your agent is working on it' };
+    switch (info.waitingFor) {
+      case 'chat_busy': return { kind: 'warn', text: `Queued: ${name} is busy — Claude takes the review when it finishes the current task.`, actions: [{ id: 'ring-now', label: 'Send now' }, cancel] };
+      case 'pickup': return { kind: 'ok', text: `Sent to ${name} — waiting for Claude to pick it up.`, actions: [cancel] };
+      case 'chat_offline': return { kind: 'warn', text: `${name} isn't reachable right now. Send any message in it, or cancel and pick another session.`, actions: [cancel] };
+      case 'not_picked_up': return { kind: 'error', text: `Claude didn't pick up the review in ${name}. Check the session, or cancel.`, actions: [cancel] };
+      case 'no_chat': return { kind: 'warn', text: 'Waiting for a Claude Code session in this project — it starts as soon as you open one.', actions: [cancel] };
+      default: return { kind: 'warn', text: 'Waiting for your agent to pick up the review (/ui-review).', actions: [cancel] };
+    }
+  }
+
+  function projectChats() {
+    const p = project();
+    return p ? (companion.chats || []).filter((c) => c.projectId === p.id) : [];
+  }
+
+  function chatName(c) {
+    return c.title || `${shortPath(c.cwd)} · ${c.id.slice(0, 6)}`;
+  }
+
+  function ago(t) {
+    const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+    return s < 60 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`;
+  }
+
+  // Same rule as the companion: claimed, else in the dev server folder, else most recent.
+  function autoChat(chats) {
+    const claimed = chats.find((c) => c.claimed);
+    if (claimed) return claimed;
+    const dev = companion.devServers?.[project()?.id]?.dir;
+    const pool = dev ? chats.filter((c) => related(c.cwd, dev)) : [];
+    return [...(pool.length ? pool : chats)].sort((a, b) => b.lastActiveAt - a.lastActiveAt)[0] || null;
+  }
+
+  function related(a, b) {
+    if (!a || !b) return false;
+    const x = a.replace(/\/+$/, '');
+    const y = b.replace(/\/+$/, '');
+    return x === y || x.startsWith(`${y}/`) || y.startsWith(`${x}/`);
+  }
+
+  // The "Fix all → session" row above the button.
+  function targetView() {
+    const p = project();
+    if (!p || companion.state !== 'connected') return null;
+    const chats = projectChats();
+    if (!chats.length) return null;
+    const chosenId = (prefs.targets || {})[ORIGIN];
+    const chosen = chats.find((c) => c.id === chosenId) || null;
+    const auto = autoChat(chats);
+    const target = chosen || auto;
+    const label = (c) => `${chatName(c)} · ${ago(c.lastActiveAt)}${c.busy ? ' · busy' : ''}${c.online ? '' : ' · offline'}${c.claimed ? ' · pinned' : ''}`;
+    const dev = companion.devServers?.[p.id]?.dir;
+    const warning = target && dev && target.cwd && !related(target.cwd, dev)
+      ? `Dev server runs from ${shortPath(dev)}, this session works in ${shortPath(target.cwd)} — its changes won't show on this page.`
+      : '';
+    return {
+      selected: chosen ? chosen.id : '',
+      options: [{ id: '', label: `Auto → ${auto ? chatName(auto) : '—'}` }, ...chats.map((c) => ({ id: c.id, label: label(c) }))],
+      warning,
+    };
+  }
+
   function shortPath(p) {
     const parts = String(p || '').split(/[\\/]/).filter(Boolean);
     return parts.length > 2 ? `…/${parts.slice(-2).join('/')}` : p;
@@ -353,15 +430,14 @@
       const candidates = (companion.candidates || []).map((c) => ({ id: `connect:${c.id}`, label: `Connect to ${c.name} (${shortPath(c.workingDirectory)})` }));
       if (candidates.length) return { kind: 'warn', text: `Which project is ${location.host}?`, actions: candidates };
       const others = (companion.projects || []).map((x) => ({ id: `add:${x.id}`, label: `Add to ${x.name}` }));
-      return { kind: 'warn', text: `${location.host} isn't connected to a project yet. Open Claude Code in the project folder and run /ui-review — this panel will offer to connect it.`, actions: others };
+      return { kind: 'warn', text: `${location.host} isn't connected to a project yet. Open Claude Code in the project folder — this panel will offer to connect it.`, actions: others };
     }
     const agent = companion.agents?.[p.id];
-    if (agent === 'working') return { kind: 'ok', text: `Connected · ${p.name} · agent working` };
-    if (annotations.some((a) => IN_FLIGHT.has(a.status))) {
-      return { kind: 'warn', text: 'This review is waiting for an agent. Start your agent and run /ui-review.', actions: [{ id: 'cancel-review', label: 'Cancel review' }] };
-    }
-    if (agent === 'waiting') return { kind: 'ok', text: `Connected · ${p.name} · agent waiting for Fix all` };
-    return { kind: 'warn', text: 'No agent is waiting for this review. Start your agent and run /ui-review, or copy as Markdown.' };
+    const flying = annotations.find((a) => IN_FLIGHT.has(a.status));
+    if (flying) return reviewStateView(flying, agent);
+    if (agent === 'waiting') return { kind: 'ok', text: `Connected · ${p.name} · an agent is waiting for Fix all` };
+    if (projectChats().length) return { kind: 'ok', text: `Connected · ${p.name}` };
+    return { kind: 'warn', text: `No Claude Code session is open in ${p.name}. Open one in ${shortPath(p.workingDirectory)} — Fix all will go there. Or copy as Markdown.` };
   }
 
   // Offer the connection once per page when an agent is waiting in a folder
@@ -395,6 +471,7 @@
       items,
       running,
       fixAllCount: companion.state === 'connected' && project() ? open : 0,
+      target: targetView(),
       hasDone: annotations.some((a) => a.status === 'accepted' || a.status === 'no_change'),
     });
     if (openCardId) {

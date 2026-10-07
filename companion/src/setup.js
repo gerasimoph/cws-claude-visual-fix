@@ -18,7 +18,7 @@ export async function setup(opts = {}) {
 
     const agents = findAgents();
     const claude = agents.find((a) => a.bin === 'claude');
-    if (claude && !opts.skipAgent) await registerClaude(io, claude.path, mcpCommand);
+    if (claude && !opts.skipAgent) await registerClaude(io, claude.path, mcpCommand, { hooks: !opts.noHooks });
     else if (!claude) io.print('! Claude Code not found on PATH — register the MCP server with your agent manually (below).');
     printManualSetup(io, mcpCommand, { hasClaude: !!claude });
 
@@ -42,9 +42,10 @@ export async function setup(opts = {}) {
     }
     io.print('');
     io.print('Next steps for the user:');
-    io.print(`  1. Restart Claude Code inside the project folder (new MCP servers load at session start), then run /ui-review.`);
+    io.print('  1. Restart Claude Code once, in the project folder (new MCP servers and hooks load at session start).');
     io.print('  2. Open the app (e.g. http://localhost:5173). The review panel offers to connect the page to that project.');
-    io.print('  3. Alt+click an element, write a comment, press Enter. Then press Fix all.');
+    io.print('  3. Alt+click an element, write a comment, press Enter. Then press Fix all: the review goes to that');
+    io.print('     Claude Code session by itself. /ui-review in a session pins Fix all to it.');
     return { browser, manifestPaths, mcpServer: MCP_SERVER_NAME };
   } finally {
     io.close();

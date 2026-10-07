@@ -86,6 +86,11 @@ button.icon { border: none; background: none; padding: 0 4px; color: #6b7280; fo
 .item .actions.secondary { display: none; }
 .item:hover .actions.secondary { display: flex; }
 .foot { padding: 10px 12px; display: flex; align-items: center; gap: 8px; border-top: 1px solid #f3f4f6; }
+.target { padding: 8px 12px 0; border-top: 1px solid #f3f4f6; font-size: 12px; color: #6b7280; }
+.target label { display: flex; align-items: center; gap: 6px; }
+.target select { flex: 1; min-width: 0; font: inherit; color: #111827; border: 1px solid #d1d5db; border-radius: 6px; padding: 3px 6px; background: #fff; }
+.target .warn { margin-top: 5px; color: #b45309; }
+.target + .foot { border-top: none; }
 .foot .spacer { flex: 1; }
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #111827; color: #fff; padding: 8px 14px; border-radius: 8px; font-size: 12px; pointer-events: none; opacity: 0; transition: opacity .2s; max-width: 80vw; }
 .toast.show { opacity: 1; }
@@ -110,6 +115,10 @@ button.icon { border: none; background: none; padding: 0 4px; color: #6b7280; fo
       this.$ = (s) => this.root.querySelector(s);
       for (const type of ['keydown', 'keyup', 'keypress', 'input', 'wheel']) this.host.addEventListener(type, (e) => e.stopPropagation());
       this.root.addEventListener('click', (e) => this.onClick(e));
+      this.root.addEventListener('change', (e) => {
+        const el = e.composedPath()[0];
+        if (el?.dataset?.act === 'target') { el.blur(); this.emit('target:change', { id: el.value }); }
+      });
       this.mount();
     }
 
@@ -243,10 +252,12 @@ button.icon { border: none; background: none; padding: 0 4px; color: #6b7280; fo
 
     renderPanel(state) {
       const slot = this.$('.panel-slot');
-      if (!state.open) { slot.innerHTML = ''; return; }
+      if (!state.open) { slot.innerHTML = ''; this._panelHtml = null; return; }
+      // Don't rebuild while the session dropdown is open or nothing changed.
+      if (this.root.activeElement?.dataset?.act === 'target') return;
       const scroll = slot.querySelector('.body')?.scrollTop || 0;
       const c = state.connection;
-      slot.innerHTML = `<div class="panel${state.collapsed ? ' collapsed' : ''}">
+      const html = `<div class="panel${state.collapsed ? ' collapsed' : ''}">
         <div class="head">
           <span class="dot ${c.kind}"></span>
           <span class="name">Review · ${esc(state.title)}</span>
@@ -256,6 +267,7 @@ button.icon { border: none; background: none; padding: 0 4px; color: #6b7280; fo
         </div>
         ${c.text ? `<div class="conn ${c.kind}">${esc(c.text)}${c.command ? `<code>${esc(c.command)}</code>` : ''}${(c.actions || []).map((a) => `<button class="link" data-act="conn" data-id="${esc(a.id)}">${esc(a.label)}</button>`).join(' ')}${c.note ? `<span class="note">${esc(c.note)}</span>` : ''}</div>` : ''}
         <div class="body">${state.items.length ? state.items.map((v) => this.itemHtml(v)).join('') : `<div class="empty"><kbd>${isMac ? '⌥' : 'Alt'}</kbd> + click any element to leave a comment.<br>Comments stay on this page until you fix them.</div>`}</div>
+        ${state.target ? `<div class="target"><label>Fix all →<select data-act="target">${state.target.options.map((o) => `<option value="${esc(o.id)}"${o.id === state.target.selected ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select></label>${state.target.warning ? `<div class="warn">${esc(state.target.warning)}</div>` : ''}</div>` : ''}
         <div class="foot">
           ${state.running ? `<button class="primary" disabled>Running ${state.running.done}/${state.running.total}</button>` : `<button class="primary" data-act="fix-all" ${state.fixAllCount ? '' : 'disabled'}>Fix all${state.fixAllCount ? ` (${state.fixAllCount})` : ''}</button>`}
           <span class="spacer"></span>
@@ -263,6 +275,9 @@ button.icon { border: none; background: none; padding: 0 4px; color: #6b7280; fo
           ${state.hasDone ? '<button class="link" data-act="clear-done" title="Remove accepted and closed comments">Clear done</button>' : ''}
         </div>
       </div>`;
+      if (html === this._panelHtml && slot.firstElementChild) return;
+      this._panelHtml = html;
+      slot.innerHTML = html;
       const body = slot.querySelector('.body');
       if (body) body.scrollTop = scroll;
     }

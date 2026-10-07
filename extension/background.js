@@ -86,7 +86,7 @@ let port = null;
 let peer = null;
 let connecting = null;
 const submitting = new Set(); // annotation ids with a review.submit in flight
-let companion = { state: 'disconnected', error: null, version: null, projects: [], agents: {}, candidates: [] };
+let companion = { state: 'disconnected', error: null, version: null, projects: [], agents: {}, candidates: [], chats: [], devServers: {} };
 
 function setCompanion(patch) {
   companion = { ...companion, ...patch };
@@ -116,12 +116,12 @@ function connectCompanion() {
       rpc.close();
       if (port === p) { port = null; peer = null; }
       const notInstalled = /not found|forbidden/i.test(error);
-      setCompanion({ state: notInstalled ? 'not_installed' : 'disconnected', error, agents: {}, candidates: [] });
+      setCompanion({ state: notInstalled ? 'not_installed' : 'disconnected', error, agents: {}, candidates: [], chats: [] });
       if (connecting) { connecting = null; resolve(false); }
     });
     registerCompanionHandlers(rpc);
     rpc.request('hello', { version: chrome.runtime.getManifest().version }, 5000).then(async (hello) => {
-      setCompanion({ state: 'connected', error: null, version: hello.version, projects: hello.projects || [], agents: hello.agents || {}, candidates: hello.candidates || [] });
+      setCompanion({ state: 'connected', error: null, version: hello.version, projects: hello.projects || [], agents: hello.agents || {}, candidates: hello.candidates || [], chats: hello.chats || [], devServers: hello.devServers || {} });
       for (const review of hello.reviews || []) await applyReview(review);
       connecting = null;
       resolve(true);
@@ -140,7 +140,8 @@ function registerCompanionHandlers(rpc) {
     .handle('page.screenshot', screenshotPage)
     .on('review.update', ({ review }) => applyReview(review))
     .on('projects.changed', ({ projects }) => setCompanion({ projects }))
-    .on('agents.update', ({ agents, candidates }) => setCompanion({ agents, candidates: candidates || [] }));
+    .on('agents.update', ({ agents, candidates }) => setCompanion({ agents, candidates: candidates || [] }))
+    .on('chats.update', ({ chats, devServers, candidates }) => setCompanion({ chats: chats || [], devServers: devServers || {}, candidates: candidates || [] }));
 }
 
 // Statuses from the companion's journal are authoritative for the review
@@ -154,13 +155,14 @@ function applyReview(review) {
       if (!u || !(a.reviewId === review.id || submitting.has(a.id))) return a;
       if (a.status === 'accepted' && u.status !== 'accepted') return a;
       changed = true;
-      return { ...a, reviewId: review.id, status: u.status, summary: u.summary || '', statusDetail: u.statusDetail || '', checks: u.checks || [], diffs: u.diffs || [] };
+      const reviewInfo = { status: review.status, chatId: review.chatId || null, waitingFor: review.waitingFor || null };
+      return { ...a, reviewId: review.id, reviewInfo, status: u.status, summary: u.summary || '', statusDetail: u.statusDetail || '', checks: u.checks || [], diffs: u.diffs || [] };
     });
     return changed ? next : null;
   });
 }
 
-async function submitReview(origin, ids) {
+async function submitReview(origin, ids, targetChatId) {
   if (!(await connectCompanion())) return { ok: false, error: 'local companion is not connected', code: 'companion_unavailable' };
   const list = await getAnnotations(origin);
   const items = ids.map((id) => list.find((a) => a.id === id)).filter((a) => a && a.status === 'open');
@@ -169,6 +171,7 @@ async function submitReview(origin, ids) {
   try {
     const res = await peer.request('review.submit', {
       origin,
+      targetChatId: targetChatId || null,
       annotations: items.map((a) => ({
         id: a.id, n: a.n, instruction: a.instruction, url: a.url, path: a.path,
         anchor: a.anchor, referenceAnchor: a.referenceAnchor, context: a.context, referenceContext: a.referenceContext, screenshot: a.screenshot,
@@ -176,7 +179,7 @@ async function submitReview(origin, ids) {
     }, 60_000);
     await mutate(origin, (cur) => cur.map((a) => (items.some((x) => x.id === a.id) && a.status === 'open' ? { ...a, status: 'queued', reviewId: res.reviewId } : a)));
     await applyReview(res.review);
-    return { ok: true, reviewId: res.reviewId, agentWaiting: res.agentWaiting };
+    return { ok: true, reviewId: res.reviewId, agentWaiting: res.agentWaiting, chatId: res.chatId };
   } catch (err) {
     return { ok: false, error: err.message, code: err.code };
   } finally {
@@ -313,7 +316,12 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       if (peer && !peer.closed) peer.request('annotation.accept', { annotationId: msg.id }).catch(() => {});
       return { ok: true };
     },
-    'review.submit': () => submitReview(origin, msg.ids),
+    'review.submit': () => submitReview(origin, msg.ids, msg.targetChatId),
+    'review.ringNow': async () => {
+      if (!(await connectCompanion())) return { ok: false };
+      for (const reviewId of msg.reviewIds || []) await peer.request('review.ringNow', { reviewId }).catch(() => {});
+      return { ok: true };
+    },
     'project.addOrigin': async () => {
       if (!(await connectCompanion())) return { ok: false, error: 'companion not connected' };
       try { await peer.request('project.addOrigin', { projectId: msg.projectId, origin }); return { ok: true }; }

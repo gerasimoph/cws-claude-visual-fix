@@ -29,12 +29,19 @@ async function main() {
       await runMcp();
       break;
     }
+    case 'doorbell': {
+      const f = flags(rest);
+      const { runDoorbell } = await import('../src/doorbell.js');
+      process.exit(await runDoorbell({ end: !!f.end, ttlSeconds: f.ttl ? Number(f.ttl) : undefined }));
+      break;
+    }
     case 'setup': {
       const f = flags(rest);
       const { setup } = await import('../src/setup.js');
       await setup({
         yes: !!f.yes,
         skipAgent: !!f.skipAgent,
+        noHooks: !!f.noHooks,
         wait: f.wait,
         extensionIds: f.extensionId ? String(f.extensionId).split(',') : [],
         browserDirs: f.browserDir ? String(f.browserDir).split(',') : [],
@@ -92,7 +99,8 @@ Usage:
   browser-feedback status        Show connected projects and browser state
   browser-feedback stats         Local review metrics (no content)
   browser-feedback mcp           MCP server (started by your coding agent)
-  browser-feedback host          Native messaging host (${HOST_NAME}, started by Chrome)`);
+  browser-feedback host          Native messaging host (${HOST_NAME}, started by Chrome)
+  browser-feedback doorbell      Claude Code hook: wakes the chat chosen for Fix all`);
   }
 }
 

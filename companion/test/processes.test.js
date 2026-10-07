@@ -95,3 +95,36 @@ test('MCP wait_for_review without a browser returns a helpful message', { timeou
   const res = await mcp.call('tools/call', { name: 'wait_for_review', arguments: { timeout_seconds: 5 } });
   assert.match(text(res), /browser is not connected/i);
 });
+
+test('doorbell hook process: started before the companion, exits 2 with the ring on Fix all', { timeout: 30_000 }, async (t) => {
+  const home = tempHome();
+  const projectDir = fileURLToPath(new URL('..', import.meta.url));
+  saveProjects([{ id: 'p1', name: 'Demo', localPath: projectDir, workingDirectory: projectDir, origins: ['http://localhost:3000'] }]);
+  const env = { ...process.env, BROWSER_FEEDBACK_HOME: home };
+
+  // Claude Code starts the hook; Chrome (and so the companion) isn't up yet.
+  const bell = spawn(process.execPath, [BIN, 'doorbell'], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+  t.after(() => bell.kill());
+  bell.stdin.end(JSON.stringify({ session_id: 'sess-1', cwd: projectDir, hook_event_name: 'Stop', session_title: 'UI fixes' }));
+  let stderr = '';
+  let stdout = '';
+  bell.stderr.on('data', (c) => { stderr += c; });
+  bell.stdout.on('data', (c) => { stdout += c; });
+  const exited = new Promise((resolve) => bell.on('exit', resolve));
+  await new Promise((r) => setTimeout(r, 500));
+
+  const host = startHost(env);
+  t.after(() => host.proc.kill());
+  host.peer.handle('page.capture', ({ items }) => ({ items: items.map((i) => ({ annotationId: i.annotationId, signature: signature() })) }));
+  const chats = [];
+  host.peer.onNotification('chats.update', (p) => chats.push(p.chats));
+  await host.peer.request('hello', {});
+  const end = Date.now() + 10_000;
+  while (!chats.at(-1)?.some((c) => c.id === 'sess-1' && c.online) && Date.now() < end) await new Promise((r) => setTimeout(r, 100));
+  assert.equal(chats.at(-1)?.find((c) => c.id === 'sess-1')?.title, 'UI fixes');
+
+  const sub = await host.peer.request('review.submit', { origin: 'http://localhost:3000', annotations: [annotationInput('a1', 'Bigger')] });
+  assert.equal(await exited, 2, 'exit code 2 wakes Claude');
+  assert.match(stderr, new RegExp(`review_id "${sub.reviewId}"`));
+  assert.equal(stdout, '', 'nothing on stdout');
+});

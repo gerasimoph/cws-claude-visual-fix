@@ -15,10 +15,13 @@ const BROWSER_NOT_CONNECTED = 'The browser is not connected. Open Chrome with th
 export const TOOLS = [
   {
     name: 'wait_for_review',
-    description: 'Wait until the user presses "Fix all" on UI review comments they left on the running web app in their browser, then return the comments with browser context (element, selectors, styles, geometry, DOM). Blocks until a review arrives or the timeout passes; if it returns without a review, call it again. Process the returned comments in order and call report_annotation for each one.',
+    description: 'Get the UI review comments the user left on their running web app in the browser, with browser context (element, selectors, styles, geometry, DOM). With review_id (from a Browser Feedback notice in this session) it returns that review at once. Without it, it waits until the user presses "Fix all"; if it returns without a review, call it again. Process the returned comments in order and call report_annotation for each one.',
     inputSchema: {
       type: 'object',
-      properties: { timeout_seconds: { type: 'number', description: `How long to wait before returning empty (default ${DEFAULT_WAIT_SECONDS}).` } },
+      properties: {
+        review_id: { type: 'string', description: 'The review id from a Browser Feedback notice in this session. Returns that review immediately.' },
+        timeout_seconds: { type: 'number', description: `Without review_id: how long to wait before returning empty (default ${DEFAULT_WAIT_SECONDS}).` },
+      },
       additionalProperties: false,
     },
   },
@@ -178,7 +181,7 @@ export async function runMcp({ input = process.stdin, output = process.stdout, l
       for (;;) {
         const peer = await link.connectUntil(deadline);
         try {
-          const res = await peer.request('waitForReview', { timeoutMs: Math.max(1000, deadline - Date.now()) });
+          const res = await peer.request('waitForReview', { timeoutMs: Math.max(1000, deadline - Date.now()), reviewId: typeof args.review_id === 'string' ? args.review_id : undefined });
           if (cancelled) return toolError('Cancelled');
           return toolResult(res);
         } catch (err) {

@@ -139,22 +139,38 @@ test('M0 loop: annotate → Fix all → agent → verify → accept', { timeout:
   await page.locator('browser-feedback-root .pin').nth(1).waitFor();
   assert.equal(await page.locator('browser-feedback-root .item').count(), 2);
 
-  // 4. Agent attaches and waits; user presses Fix all.
-  const agent = mcpClient(env, project);
-  t.after(() => agent.proc.kill());
-  await agent.call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'e2e-agent', version: '1' } });
-  const waiting = agent.tool('wait_for_review', { timeout_seconds: 60 });
-  // The agent's folder isn't a project yet: the panel asks which one this page is.
+  // 4. A Claude Code chat in the project folder: its doorbell hook (as Claude
+  //    Code would start it) announces the chat and waits in the background.
+  const bell = spawn(process.execPath, [CLI, 'doorbell'], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+  t.after(() => bell.kill());
+  bell.stdin.end(JSON.stringify({ session_id: 'chat-e2e', cwd: project, hook_event_name: 'SessionStart', session_title: 'UI fixes' }));
+  let bellErr = '';
+  bell.stderr.on('data', (c) => { bellErr += c; });
+  const rung = new Promise((resolve) => bell.on('exit', resolve));
+
+  // The chat's folder isn't a project yet: the panel asks which one this page is.
   const connectBtn = page.locator('browser-feedback-root button[data-act="conn"][data-id^="connect:"]');
   await connectBtn.waitFor();
   assert.match(await connectBtn.textContent(), /Connect to acme-web/);
   await connectBtn.click();
-  await waitFor(async () => {
-    const c = await storage('companion');
-    return Object.values(c?.agents || {}).includes('waiting') && c.projects.some((p) => p.origins.includes(origin));
-  }, 'project connected and agent waiting');
+
+  // The panel shows where Fix all goes.
+  const target = page.locator('browser-feedback-root .target select');
+  await target.waitFor();
+  assert.match(await target.locator('option').first().textContent(), /Auto → UI fixes/);
+  if (process.env.E2E_SHOT) { await page.waitForTimeout(1500); await page.screenshot({ path: process.env.E2E_SHOT }); }
+
   await page.locator('browser-feedback-root button[data-act="fix-all"]').click();
-  const review = await waiting;
+  assert.equal(await rung, 2, 'Fix all wakes the chat (hook exits 2)');
+  const [, reviewId] = /review_id "([^"]+)"/.exec(bellErr);
+
+  // Woken Claude fetches exactly that review over MCP.
+  const agent = mcpClient(env, project);
+  t.after(() => agent.proc.kill());
+  await agent.call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'e2e-agent', version: '1' } });
+  const review = await agent.tool('wait_for_review', { review_id: reviewId });
+  assert.match(review.text, /next "Fix all" will notify this session by itself/);
+  await page.locator('browser-feedback-root .conn', { hasText: 'Claude is working in «UI fixes»' }).waitFor();
   assert.match(review.text, /INSTRUCTION: Make this the same height as the Monthly card/);
   assert.match(review.text, /INSTRUCTION: Remove this button/);
   const [, firstId] = /Comment 1 — id `([^`]+)`/.exec(review.text);

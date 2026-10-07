@@ -20,8 +20,16 @@ Chrome extension ──Native Messaging──▶ companion host ◀──unix so
    npx -y github:gerasimoph/cws-claude-visual-fix setup --yes --extension-id <id>
    ```
    `setup` ставит всё на уровне машины: companion в `~/.browser-feedback`, native host для Chrome/Chromium/Brave/Edge, MCP-сервер `browser-feedback` в Claude Code (user scope) и `/ui-review`. Затем ждёт, пока расширение подключится: страница-приветствие сама переключается в «connected».
-3. **Проект подключается из браузера.** Claude Code перезапускается в папке проекта, там выполняется `/ui-review`. Панель на `localhost` спрашивает «Which project is localhost:5173? — Connect to acme-web». Это подтверждение по PRD §14.3, только в браузере вместо терминала.
+3. **Проект подключается из браузера.** Один раз перезапустить Claude Code в папке проекта. Панель на `localhost` спрашивает «Which project is localhost:5173? — Connect to acme-web». Это подтверждение по PRD §14.3, только в браузере вместо терминала.
 4. ⌥/Alt+клик (↑ — родитель) → текст → Enter, затем **Fix all**. Pins: Queued → Working → Verifying → Fixed / Changed — check / Failed → Accept.
+
+### Куда уходит Fix all
+
+`setup` ставит в `~/.claude/settings.json` хук-«звонок» (`asyncRewake`) на SessionStart, UserPromptSubmit и Stop. Каждый чат Claude Code сообщает companion свой `session_id`, папку и название и ждёт в фоне. По Fix all companion выбирает чат и «звонит»: хук завершается с кодом 2, Claude просыпается в этом чате и забирает review через MCP (`wait_for_review` с `review_id`). Данных страницы в звонке нет.
+
+Как выбирается чат: выбранный в панели («Fix all → …») → закреплённый через `/ui-review` → работающий в папке dev server → последний активный. Занятый чат не прерывается: review ждёт конца текущего хода (есть «Send now»). Если папка выбранного чата не совпадает с папкой процесса, который слушает порт страницы (git worktree, вторая копия репо), панель предупреждает: правки не появятся на странице.
+
+Агенты без хуков (Codex и др.) работают по-старому: `wait_for_review` в цикле.
 
 **В проект не пишется ни одного файла.** Пакета `browser-feedback` в npm нет, `npx` работает из GitHub (репозиторий приватный — нужен git-доступ). `setup` нужно запускать на машине с Chrome, не в облачной сессии. Ручной путь для одного проекта остаётся: `browser-feedback connect`.
 
@@ -29,7 +37,7 @@ Chrome extension ──Native Messaging──▶ companion host ◀──unix so
 
 ```bash
 npm install          # playwright-core для e2e
-npm test             # unit + интеграция реальных процессов host ↔ MCP (25 тестов)
+npm test             # unit + интеграция реальных процессов host ↔ MCP (39 тестов)
 npm run test:e2e     # полный цикл в настоящем Chromium с расширением и native host
 ```
 
