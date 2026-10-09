@@ -66,6 +66,7 @@ export class Companion {
       candidates: this.candidates(),
       chats: this.chatList(),
       devServers: this.devServers,
+      mcp: this.mcpPresence(),
     };
   }
 
@@ -76,6 +77,7 @@ export class Companion {
 
   notifyProjectsChanged() {
     this.extension?.notify('projects.changed', { projects: this.reloadProjects() });
+    this.placeAll();
   }
 
   addOrigin({ projectId, origin }) {
@@ -88,21 +90,26 @@ export class Companion {
     project.origins.push(o);
     if (this.persist) saveProjects(projects);
     this.projects = projects;
+    this.placeAll();
     this.notifyProjectsChanged();
+    this.pushChats();
+    this.dispatch(project.id);
     return { project };
   }
 
   // An agent running in a folder that is not a known project yet: the browser
   // confirms which page belongs to it (PRD §14.3 — confirmation is required).
+  // `candidateId` names a folder where a Claude Code session runs (see candidates()).
   connectProject({ candidateId, origin }) {
     const o = normalizeOrigin(origin);
     if (!o) throw new Error('Invalid origin');
-    const sessions = [...this.sessions.values(), ...this.chats.values()].filter((s) => s.candidate?.id === candidateId);
-    if (!sessions.length) throw new Error('That Claude Code session is gone — open it again in the project folder');
-    const { defaultPort, ...facts } = sessions[0].candidate;
+    const holder = this.allSessions().find((s) => s.folder?.id === candidateId);
+    if (!holder) throw new Error('That Claude Code session is gone — open it again in the project folder');
+    const { defaultPort, ...facts } = holder.folder;
     const projects = this.reloadProjects();
     for (const p of projects) p.origins = (p.origins || []).filter((x) => x !== o);
-    const existing = projects.find((p) => p.id === facts.id);
+    const existing = projects.find((p) => p.id === facts.id) || projects.find((p) => p.workingDirectory === facts.workingDirectory);
+    if (existing) facts.id = existing.id;
     const project = {
       ...(existing || {}),
       ...facts,
@@ -113,7 +120,7 @@ export class Companion {
     const next = [...projects.filter((p) => p.id !== project.id), project];
     if (this.persist) saveProjects(next);
     this.projects = next;
-    for (const s of sessions) { s.projectId = project.id; s.candidate = null; }
+    this.placeAll();
     recordMetric('project_connected', { framework: project.framework || null, via: 'browser' });
     this.notifyProjectsChanged();
     this.pushAgents();
@@ -259,7 +266,8 @@ export class Companion {
   }
 
   detachAgent(session) {
-    this.sessions.delete(session.id);
+    if (!this.sessions.delete(session.id)) return;
+    if (session.cwd) this.pushChats();
     this.waiters = this.waiters.filter((w) => {
       if (w.session !== session) return true;
       clearTimeout(w.timer);
@@ -269,13 +277,28 @@ export class Companion {
   }
 
   agentHello(session, { cwd, client }) {
-    session.cwd = typeof cwd === 'string' ? cwd : null;
     session.client = typeof client === 'string' ? client.slice(0, 80) : null;
-    const project = findProjectByDirectory(this.reloadProjects(), session.cwd);
-    session.projectId = project?.id || null;
-    session.candidate = !project && session.cwd ? describeProject(session.cwd) : null;
+    this.place(session, typeof cwd === 'string' ? cwd : null, this.reloadProjects());
     this.pushAgents();
+    this.pushChats();
+    const project = this.projects.find((p) => p.id === session.projectId);
     return { version: VERSION, project: project ? { id: project.id, name: project.name } : null, browserConnected: !!this.extension };
+  }
+
+  allSessions() {
+    return [...this.sessions.values(), ...this.chats.values()];
+  }
+
+  // Maps a session or chat folder to its project; `folder` is what the panel
+  // offers to connect when the page isn't linked to a project yet.
+  place(s, cwd, projects = this.projects) {
+    if (cwd !== undefined && cwd !== s.cwd) { s.cwd = cwd; s.folder = cwd ? describeProject(cwd) : null; }
+    const project = s.cwd ? findProjectByDirectory(projects, s.cwd) : null;
+    s.projectId = project?.id || null;
+  }
+
+  placeAll() {
+    for (const s of this.allSessions()) this.place(s);
   }
 
   waiterMatches(w, projectId) {
@@ -360,7 +383,8 @@ export class Companion {
   attachDoorbell(peer) {
     peer
       .handle('bell.register', (p) => this.registerBell(peer, p))
-      .handle('bell.end', (p) => this.endChat(p));
+      .handle('bell.end', (p) => this.endChat(p))
+      .handle('debug.state', () => this.debugState());
   }
 
   registerBell(peer, { sessionId, cwd, title, event, prompt }) {
@@ -368,15 +392,10 @@ export class Companion {
     const now = Date.now();
     let chat = this.chats.get(sessionId);
     if (!chat) {
-      chat = { id: sessionId, cwd: null, title: null, projectId: null, candidate: null, busy: false, busySince: 0, claimed: false, bell: null, startedAt: now, rings: 0 };
+      chat = { id: sessionId, cwd: null, folder: null, title: null, projectId: null, busy: false, busySince: 0, claimed: false, bell: null, startedAt: now, rings: 0 };
       this.chats.set(sessionId, chat);
     }
-    if (typeof cwd === 'string' && cwd !== chat.cwd) {
-      chat.cwd = cwd;
-      const project = findProjectByDirectory(this.reloadProjects(), cwd);
-      chat.projectId = project?.id || null;
-      chat.candidate = project ? null : describeProject(cwd);
-    }
+    if (typeof cwd === 'string' && cwd !== chat.cwd) this.place(chat, cwd, this.reloadProjects());
     if (title) chat.title = String(title).slice(0, 80);
     chat.lastActiveAt = now;
     if (event === 'UserPromptSubmit') {
@@ -452,13 +471,19 @@ export class Companion {
     this.pushChats();
   }
 
+  mcpPresence() {
+    const out = {};
+    for (const s of this.sessions.values()) if (s.projectId) out[s.projectId] = (out[s.projectId] || 0) + 1;
+    return out;
+  }
+
   chatList() {
     return [...this.chats.values()].map((c) => ({
       id: c.id,
       title: c.title,
       cwd: c.cwd,
       projectId: c.projectId,
-      candidateId: c.candidate?.id || null,
+      folderId: c.folder?.id || null,
       lastActiveAt: c.lastActiveAt,
       busy: this.isBusy(c),
       online: !!c.bell,
@@ -481,12 +506,12 @@ export class Companion {
 
   pushChats() {
     if (!this.extension) return;
-    this.extension.notify('chats.update', { chats: this.chatList(), devServers: this.devServers, candidates: this.candidates() });
+    this.extension.notify('chats.update', { chats: this.chatList(), devServers: this.devServers, candidates: this.candidates(), mcp: this.mcpPresence() });
     clearTimeout(this._devTimer);
     this._devTimer = setTimeout(async () => {
       const before = JSON.stringify(this.devServers);
       await this.refreshDevServers().catch(() => {});
-      if (JSON.stringify(this.devServers) !== before) this.extension?.notify('chats.update', { chats: this.chatList(), devServers: this.devServers, candidates: this.candidates() });
+      if (JSON.stringify(this.devServers) !== before) this.extension?.notify('chats.update', { chats: this.chatList(), devServers: this.devServers, candidates: this.candidates(), mcp: this.mcpPresence() });
     }, 50);
   }
 
@@ -765,15 +790,29 @@ export class Companion {
     return status;
   }
 
+  // Folders with a live Claude Code session or MCP connection — what the panel
+  // offers when a page isn't linked to a project yet.
   candidates() {
     const out = new Map();
-    for (const s of [...this.sessions.values(), ...this.chats.values()]) {
-      if (!s.candidate) continue;
+    for (const s of this.allSessions()) {
+      if (!s.folder) continue;
       const waiting = this.waiters.some((w) => w.session === s) || !!s.bell;
-      const prev = out.get(s.candidate.id);
-      out.set(s.candidate.id, { ...s.candidate, waiting: waiting || !!prev?.waiting });
+      const prev = out.get(s.folder.id);
+      out.set(s.folder.id, { ...s.folder, projectId: s.projectId, waiting: waiting || !!prev?.waiting, doorbell: !!s.bell || !!prev?.doorbell });
     }
     return [...out.values()];
+  }
+
+  // For `browser-feedback status`: what the companion currently knows.
+  debugState() {
+    return {
+      version: VERSION,
+      browserConnected: !!this.extension,
+      projects: this.projects.map((p) => ({ name: p.name, workingDirectory: p.workingDirectory, origins: p.origins })),
+      chats: [...this.chats.values()].map((c) => ({ id: c.id, title: c.title, cwd: c.cwd, project: this.projects.find((p) => p.id === c.projectId)?.name || null, online: !!c.bell, busy: this.isBusy(c), lastActiveAt: c.lastActiveAt })),
+      mcpSessions: [...this.sessions.values()].filter((s) => s.cwd).map((s) => ({ cwd: s.cwd, client: s.client, project: this.projects.find((p) => p.id === s.projectId)?.name || null, waiting: this.waiters.some((w) => w.session === s) })),
+      pendingReviews: [...this.reviews.values()].filter((r) => r.status !== 'done').map((r) => ({ id: r.id, origin: r.origin, status: r.status, waitingFor: r.waitingFor || null })),
+    };
   }
 
   pushAgents() {

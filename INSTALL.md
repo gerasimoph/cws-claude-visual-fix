@@ -39,6 +39,7 @@ It writes nothing into the current project, needs no sudo, and opens no network 
 | Extension says *access … forbidden* | Extension id mismatch. Run `setup` again with the `--extension-id` the user gave. |
 | `claude mcp add` failed | Run it yourself with the command the installer printed. |
 | `settings.json is not valid JSON — hooks not installed` | Fix the file (or remove comments), then run `setup` again. Without hooks, `/ui-review` still works: the session then waits for Fix all itself. |
+| Panel can't find the Claude Code session, or Fix all doesn't reach it | Run `node ~/.browser-feedback/app/bin/browser-feedback.js status` — it lists what the companion sees and ends with a diagnosis. |
 | Panel says the session is offline | That session started before setup, or it was idle for over a day. Send any message in it, or restart it. |
 
 To uninstall: `claude mcp remove browser-feedback`, remove the hook entries containing `browser-feedback.js` from `~/.claude/settings.json` (a backup is at `settings.json.bak-browser-feedback`), delete `~/.claude/commands/ui-review.md` and `~/.browser-feedback`, and remove `com.browser_feedback.companion.json` from the browsers' `NativeMessagingHosts` folders (paths printed by the installer).

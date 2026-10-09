@@ -155,7 +155,7 @@ test('M0 loop: annotate → Fix all → agent → verify → accept', { timeout:
   await connectBtn.click();
 
   // The panel shows where Fix all goes.
-  const target = page.locator('browser-feedback-root .target select');
+  const target = page.locator('browser-feedback-root .fix-target select');
   await target.waitFor();
   assert.match(await target.locator('option').first().textContent(), /Auto → UI fixes/);
   if (process.env.E2E_SHOT) { await page.waitForTimeout(1500); await page.screenshot({ path: process.env.E2E_SHOT }); }

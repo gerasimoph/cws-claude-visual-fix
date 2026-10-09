@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Browser Feedback for Coding Agents",
   "short_name": "Browser Feedback",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Leave comments on your running app. Your coding agent fixes them — and the result is verified on the page.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAr3DbMSu1ScZ/SPnUwG9a3u9Ff9R4WPhdbLvzGQWNv7a9/GH0D0ShU/GGIxbjdCznRovEddbOw1iqVHO5JyZVQnHgBKcWLDfnMTVPz9D1kXZmpgwgDw4N8wRla3wUN19f4mG1nRRT+8vsR+w3+RPye49bDEMN9G/b9OjN0KQzns3qZHcTk3oLqy/D/iIEbrWL3UbMy35E2j4QeThPWPjb8ChZ12oRQtsiAVsvULUJ59Tc3ynOqAkRXXm4x4SGOf+ofzJfMZjSXMsjIB98A+Rz9WliPgyA7vP9KYJd7UiphvIgKJjRjFWRyexMqFLg5LVzPnpYvwySbiYZi2E6Bpno4wIDAQAB",
   "minimum_chrome_version": "116",

@@ -206,3 +206,35 @@ test('invalid settings.json is left untouched', () => {
   assert.throws(() => installHooks({ nodePath: 'n', entry: 'e', settingsPath: file }), /not valid JSON/);
   assert.equal(readFileSync(file, 'utf8'), '{ // comment\n}');
 });
+
+test('monorepo: a sibling app is its own project; a session at the repo root belongs to the app', async () => {
+  saveProjects([{ id: 'aso', name: 'aso', localPath: '/mono', workingDirectory: '/mono/apps/aso', origins: ['http://localhost:3001'] }]);
+  companion.reloadProjects();
+  const sibling = bell('shelf', '/mono/apps/book-shelf');
+  bell('root', '/mono', { event: 'Stop' });
+  await tick();
+  const chats = Object.fromEntries(companion.chatList().map((c) => [c.id, c.projectId]));
+  assert.equal(chats.shelf, null, 'sibling app is not the aso project');
+  assert.equal(chats.root, 'aso', 'repo-root session counts for the app inside it');
+
+  const cands = (await ext.request('hello', {})).candidates;
+  const shelf = cands.find((c) => c.workingDirectory === '/mono/apps/book-shelf');
+  assert.ok(shelf, 'panel can offer Connect to book-shelf');
+  const { project } = await ext.request('project.connect', { candidateId: shelf.id, origin: 'http://localhost:8081' });
+  assert.equal(project.workingDirectory, '/mono/apps/book-shelf');
+  assert.equal(companion.chatList().find((c) => c.id === 'shelf').projectId, project.id);
+  page.set('b1', signature());
+  await ext.request('review.submit', { origin: 'http://localhost:8081', annotations: [annotationInput('b1', 'FAQ here')] });
+  assert.equal((await sibling).action, 'ring');
+});
+
+test('debug state lists chats and MCP sessions for `status`', async () => {
+  bell('c1', '/proj');
+  await agent('/proj');
+  await tick();
+  const [d, h] = peerPair();
+  companion.attachDoorbell(h);
+  const state = await d.request('debug.state', {});
+  assert.equal(state.chats[0].project, 'acme');
+  assert.equal(state.mcpSessions[0].project, 'acme');
+});

@@ -35,7 +35,7 @@ async function render() {
   const project = (companion.projects || []).find((p) => (p.origins || []).includes(origin));
 
   $('dot').className = `dot ${companion.state === 'connected' ? 'ok' : companion.state === 'not_installed' ? 'warn' : 'error'}`;
-  $('version').textContent = companion.version ? `companion ${companion.version}` : '';
+  $('version').textContent = companion.state === 'connected' ? `helper connected · ${companion.version}` : companion.state === 'not_installed' ? 'helper not installed' : 'helper not connected';
 
   // This tab
   const tabEl = $('tab');
@@ -50,10 +50,15 @@ async function render() {
     };
   } else if (project) {
     const agent = companion.agents?.[project.id];
-    tabEl.innerHTML = `<div><strong>${esc(project.name)}</strong> <span class="muted">${esc(origin)}</span></div><div class="muted">${agent === 'waiting' ? 'Agent waiting for Fix all' : agent === 'working' ? 'Agent working' : 'No agent attached — run /ui-review in your agent'}</div>`;
+    const chats = (companion.chats || []).filter((c) => c.projectId === project.id);
+    const line = agent === 'working' ? 'Claude is working on a review'
+      : chats.length ? `Fix all goes to Claude Code (${chats.length} session${chats.length === 1 ? '' : 's'} in this project)`
+      : companion.mcp?.[project.id] ? 'Claude Code is open but can\'t be woken — restart it or type /ui-review'
+      : 'No Claude Code session in this project yet';
+    tabEl.innerHTML = `<div><strong>${esc(project.name)}</strong> <span class="muted">${esc(origin)}</span></div><div class="muted">${esc(line)}</div>`;
   } else {
-    const waiting = (companion.candidates || []).length;
-    tabEl.innerHTML = `<div><strong>Project not connected</strong> <span class="muted">${esc(origin)}</span></div><div class="muted">${waiting ? 'Your agent is running — confirm the project in the review panel on the page.' : 'Open Claude Code in the project folder and run /ui-review; the review panel will offer to connect this page.'}</div>`;
+    const folders = (companion.candidates || []).length;
+    tabEl.innerHTML = `<div><strong>This page isn't linked to a project</strong> <span class="muted">${esc(origin)}</span></div><div class="muted">${folders ? 'Pick the project in the review panel on the page ("Connect to …").' : 'Start or restart Claude Code in the project folder — the review panel on the page will then offer "Connect to …".'}</div>`;
   }
   $('select').disabled = !enabled;
   $('panel').disabled = !enabled;

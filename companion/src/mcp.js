@@ -93,6 +93,18 @@ export class HostLink {
     return peer;
   }
 
+  // Keep a connection open from startup so the companion (and the browser
+  // panel) know a Claude Code session runs in this folder even before any
+  // tool call — and even when the doorbell hooks aren't running.
+  startPresence(intervalMs = 10_000) {
+    const tick = async () => {
+      if (!this.peer || this.peer.closed) { try { await this.connect(); } catch {} }
+      this._presence = setTimeout(tick, intervalMs);
+      this._presence.unref?.();
+    };
+    tick();
+  }
+
   async connectUntil(deadline) {
     for (;;) {
       try { return await this.connect(); }
@@ -124,6 +136,7 @@ export async function runMcp({ input = process.stdin, output = process.stdout, l
       switch (method) {
         case 'initialize': {
           link.client = params.clientInfo?.name || null;
+          link.startPresence();
           const protocolVersion = SUPPORTED_PROTOCOLS.includes(params.protocolVersion) ? params.protocolVersion : SUPPORTED_PROTOCOLS[0];
           return reply(id, {
             protocolVersion,

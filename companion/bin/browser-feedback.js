@@ -67,15 +67,8 @@ async function main() {
       break;
     }
     case 'status': {
-      const { loadProjects } = await import('../src/store.js');
-      const { canConnect } = await import('../src/host.js');
-      const { dataDir, socketPath } = await import('../src/paths.js');
-      console.log(`browser-feedback ${VERSION}`);
-      console.log(`Data directory: ${dataDir()}`);
-      console.log(`Browser connected: ${(await canConnect(socketPath())) ? 'yes' : 'no'}`);
-      const projects = loadProjects();
-      if (!projects.length) console.log('No projects connected. Run `browser-feedback connect` in a project directory.');
-      for (const p of projects) console.log(`• ${p.name}  ${p.origins.join(', ')}  ${p.workingDirectory}`);
+      const { status } = await import('../src/status.js');
+      await status();
       break;
     }
     case 'stats': {

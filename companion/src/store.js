@@ -43,19 +43,24 @@ export function findProjectByOrigin(projects, origin) {
   return projects.find((p) => (p.origins || []).includes(o)) || null;
 }
 
+// Which project a session folder belongs to. A folder inside a project's
+// working directory belongs to it; so does a parent of it inside the same repo
+// (a session at the monorepo root). A sibling app in the same repo does not:
+// it is a different project, even though the git root is shared.
 export function findProjectByDirectory(projects, dir) {
   if (!dir) return null;
-  const resolved = path.resolve(dir);
-  // Most specific match wins (monorepo apps inside a repo).
-  const matches = projects
-    .map((p) => {
-      const roots = [p.workingDirectory, p.localPath].filter(Boolean).map((r) => path.resolve(r));
-      const hit = roots.filter((r) => resolved === r || resolved.startsWith(r + path.sep));
-      return hit.length ? { p, len: Math.max(...hit.map((r) => r.length)) } : null;
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.len - a.len);
-  return matches[0]?.p || null;
+  const d = path.resolve(dir);
+  const inside = (child, parent) => child === parent || child.startsWith(parent + path.sep);
+  const scored = [];
+  for (const p of projects) {
+    if (!p.workingDirectory) continue;
+    const wd = path.resolve(p.workingDirectory);
+    const repo = path.resolve(p.localPath || p.workingDirectory);
+    if (inside(d, wd)) scored.push({ p, score: 1e6 + wd.length });
+    else if (inside(wd, d) && inside(d, repo)) scored.push({ p, score: 1e3 - (wd.length - d.length) });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0]?.p || null;
 }
 
 // ---- Reviews journal -------------------------------------------------------

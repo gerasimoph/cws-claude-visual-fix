@@ -1,7 +1,7 @@
 {
   "name": "browser-feedback-workspace",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Browser Feedback for Coding Agents \u2014 Chrome extension + local companion (M0 validation prototype).",
   "type": "module",
   "bin": {

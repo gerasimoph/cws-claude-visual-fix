@@ -121,7 +121,7 @@ function connectCompanion() {
     });
     registerCompanionHandlers(rpc);
     rpc.request('hello', { version: chrome.runtime.getManifest().version }, 5000).then(async (hello) => {
-      setCompanion({ state: 'connected', error: null, version: hello.version, projects: hello.projects || [], agents: hello.agents || {}, candidates: hello.candidates || [], chats: hello.chats || [], devServers: hello.devServers || {} });
+      setCompanion({ state: 'connected', error: null, version: hello.version, projects: hello.projects || [], agents: hello.agents || {}, candidates: hello.candidates || [], chats: hello.chats || [], devServers: hello.devServers || {}, mcp: hello.mcp || {} });
       for (const review of hello.reviews || []) await applyReview(review);
       connecting = null;
       resolve(true);
@@ -141,7 +141,7 @@ function registerCompanionHandlers(rpc) {
     .on('review.update', ({ review }) => applyReview(review))
     .on('projects.changed', ({ projects }) => setCompanion({ projects }))
     .on('agents.update', ({ agents, candidates }) => setCompanion({ agents, candidates: candidates || [] }))
-    .on('chats.update', ({ chats, devServers, candidates }) => setCompanion({ chats: chats || [], devServers: devServers || {}, candidates: candidates || [] }));
+    .on('chats.update', ({ chats, devServers, candidates, mcp }) => setCompanion({ chats: chats || [], devServers: devServers || {}, candidates: candidates || [], mcp: mcp || {} }));
 }
 
 // Statuses from the companion's journal are authoritative for the review

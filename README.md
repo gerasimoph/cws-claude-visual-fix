@@ -37,7 +37,7 @@ Chrome extension ──Native Messaging──▶ companion host ◀──unix so
 
 ```bash
 npm install          # playwright-core для e2e
-npm test             # unit + интеграция реальных процессов host ↔ MCP (39 тестов)
+npm test             # unit + интеграция реальных процессов host ↔ MCP (41 тест)
 npm run test:e2e     # полный цикл в настоящем Chromium с расширением и native host
 ```
 

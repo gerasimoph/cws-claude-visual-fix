@@ -43,7 +43,9 @@
 .card textarea { width: 100%; min-height: 64px; max-height: 200px; resize: vertical; border: 1px solid #d1d5db; border-radius: 6px; padding: 7px 8px; font: inherit; color: inherit; outline: none; }
 .card textarea:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,.15); }
 .card .title { font-weight: 600; margin-bottom: 6px; display: flex; justify-content: space-between; gap: 8px; }
-.card .target { color: #6b7280; font-size: 11px; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .target { color: #6b7280; font-size: 11px; margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+.card .target span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .target button { flex: none; font-size: 11px; }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
 .hint { color: #9ca3af; font-size: 11px; }
 .chip { display: inline-flex; align-items: center; gap: 4px; background: #fef3c7; color: #92400e; border-radius: 10px; padding: 1px 8px; font-size: 11px; }
@@ -86,11 +88,11 @@ button.icon { border: none; background: none; padding: 0 4px; color: #6b7280; fo
 .item .actions.secondary { display: none; }
 .item:hover .actions.secondary { display: flex; }
 .foot { padding: 10px 12px; display: flex; align-items: center; gap: 8px; border-top: 1px solid #f3f4f6; }
-.target { padding: 8px 12px 0; border-top: 1px solid #f3f4f6; font-size: 12px; color: #6b7280; }
-.target label { display: flex; align-items: center; gap: 6px; }
-.target select { flex: 1; min-width: 0; font: inherit; color: #111827; border: 1px solid #d1d5db; border-radius: 6px; padding: 3px 6px; background: #fff; }
-.target .warn { margin-top: 5px; color: #b45309; }
-.target + .foot { border-top: none; }
+.fix-target { padding: 8px 12px 0; border-top: 1px solid #f3f4f6; font-size: 12px; color: #6b7280; }
+.fix-target label { display: flex; align-items: center; gap: 6px; }
+.fix-target select { flex: 1; min-width: 0; font: inherit; color: #111827; border: 1px solid #d1d5db; border-radius: 6px; padding: 3px 6px; background: #fff; }
+.fix-target .warn { margin-top: 5px; color: #b45309; }
+.fix-target + .foot { border-top: none; }
 .foot .spacer { flex: 1; }
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #111827; color: #fff; padding: 8px 14px; border-radius: 8px; font-size: 12px; pointer-events: none; opacity: 0; transition: opacity .2s; max-width: 80vw; }
 .toast.show { opacity: 1; }
@@ -173,7 +175,7 @@ button.icon { border: none; background: none; padding: 0 4px; color: #6b7280; fo
     openComposer(el, { reference = null, draft = '' } = {}) {
       const slot = this.$('.card-slot');
       slot.innerHTML = `<div class="card composer">
-        <div class="target">${esc(BF.capture.summary(el))}</div>
+        <div class="target"><span>${esc(BF.capture.summary(el))}</span><button class="link" data-act="composer-parent" title="Comment on the parent element instead">↑ Parent</button></div>
         <textarea placeholder="What should change?">${esc(draft)}</textarea>
         <div class="row">
           <span>${reference ? `<span class="chip">ref: ${esc(BF.capture.label(reference))} <button class="icon" data-act="ref-clear" title="Remove reference">×</button></span>` : `<button class="link" data-act="ref-pick" title="Point at another element, e.g. 'same height as this one'">+ Reference element</button>`}</span>
@@ -266,8 +268,8 @@ button.icon { border: none; background: none; padding: 0 4px; color: #6b7280; fo
           <button class="icon" data-act="panel-close" title="Hide panel">×</button>
         </div>
         ${c.text ? `<div class="conn ${c.kind}">${esc(c.text)}${c.command ? `<code>${esc(c.command)}</code>` : ''}${(c.actions || []).map((a) => `<button class="link" data-act="conn" data-id="${esc(a.id)}">${esc(a.label)}</button>`).join(' ')}${c.note ? `<span class="note">${esc(c.note)}</span>` : ''}</div>` : ''}
-        <div class="body">${state.items.length ? state.items.map((v) => this.itemHtml(v)).join('') : `<div class="empty"><kbd>${isMac ? '⌥' : 'Alt'}</kbd> + click any element to leave a comment.<br>Comments stay on this page until you fix them.</div>`}</div>
-        ${state.target ? `<div class="target"><label>Fix all →<select data-act="target">${state.target.options.map((o) => `<option value="${esc(o.id)}"${o.id === state.target.selected ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select></label>${state.target.warning ? `<div class="warn">${esc(state.target.warning)}</div>` : ''}</div>` : ''}
+        <div class="body">${state.items.length ? state.items.map((v) => this.itemHtml(v)).join('') : `<div class="empty"><kbd>${isMac ? '⌥' : 'Alt'}</kbd> + click any element to leave a comment.<br>In DevTools device mode: <kbd>${isMac ? '⌥' : 'Alt'}⇧C</kbd>, then tap.<br>Comments stay on this page until you fix them.</div>`}</div>
+        ${state.target ? `<div class="fix-target"><label>Fix all →<select data-act="target">${state.target.options.map((o) => `<option value="${esc(o.id)}"${o.id === state.target.selected ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select></label>${state.target.warning ? `<div class="warn">${esc(state.target.warning)}</div>` : ''}</div>` : ''}
         <div class="foot">
           ${state.running ? `<button class="primary" disabled>Running ${state.running.done}/${state.running.total}</button>` : `<button class="primary" data-act="fix-all" ${state.fixAllCount ? '' : 'disabled'}>Fix all${state.fixAllCount ? ` (${state.fixAllCount})` : ''}</button>`}
           <span class="spacer"></span>
@@ -325,7 +327,7 @@ button.icon { border: none; background: none; padding: 0 4px; color: #6b7280; fo
       const map = {
         pin: 'pin:click', item: 'item:focus', accept: 'item:accept', delete: 'item:delete', retry: 'item:retry',
         'fix-all': 'panel:fixall', 'copy-md': 'panel:copy', 'clear-done': 'panel:clearDone', 'panel-close': 'panel:close',
-        'panel-collapse': 'panel:collapse', conn: 'conn:action', 'card-close': 'card:close', 'ref-pick': 'composer:pickReference', 'ref-clear': 'composer:clearReference',
+        'panel-collapse': 'panel:collapse', conn: 'conn:action', 'card-close': 'card:close', 'ref-pick': 'composer:pickReference', 'composer-parent': 'composer:parent', 'ref-clear': 'composer:clearReference',
       };
       if (map[act]) this.emit(map[act], { id, rect: target.getBoundingClientRect() });
     }

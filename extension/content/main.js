@@ -10,6 +10,7 @@
   const ORIGIN = location.origin;
   const ANN_KEY = `ann:${ORIGIN}`;
   const INSTALL_PROMPT = globalThis.BFOnboarding.installPrompt(chrome.runtime.id);
+  const STATUS_CMD = 'node ~/.browser-feedback/app/bin/browser-feedback.js status';
   const IN_FLIGHT = new Set(['queued', 'working', 'verifying']);
   const CAN_ACCEPT = new Set(['fixed', 'changed_check', 'no_change']);
   const { redactUrl } = globalThis.BFRedact;
@@ -92,6 +93,36 @@
   for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click', 'dblclick', 'auxclick', 'contextmenu']) {
     window.addEventListener(type, (e) => { if (type !== 'contextmenu' || mode) interceptPointer(e); }, true);
   }
+
+  // DevTools device mode and touch screens send touch events. Without this, a
+  // tap in selection mode reaches the app (buttons, React Native Pressables)
+  // and the selection is lost. There is no hover on touch: the tapped element
+  // is highlighted on touchstart and picked on touchend.
+  const touchSelecting = (e) => mode === 'select' || mode === 'reference' || e.altKey;
+  const touchTarget = (e) => {
+    const t = e.changedTouches?.[0];
+    const el = t ? document.elementFromPoint(t.clientX, t.clientY) : null;
+    return el && !ui.contains(el) && el !== document.documentElement ? el : null;
+  };
+  window.addEventListener('touchstart', (e) => {
+    if (!touchSelecting(e) || !pageTarget(e)) return;
+    swallow(e);
+    if (!mode) setMode('select');
+    const el = touchTarget(e);
+    if (el) highlight(el);
+  }, { capture: true, passive: false });
+  window.addEventListener('touchmove', (e) => {
+    if (!touchSelecting(e) || !pageTarget(e)) return;
+    swallow(e);
+    const el = touchTarget(e);
+    if (el && el !== hoverEl) { upStack = []; highlight(el); }
+  }, { capture: true, passive: false });
+  window.addEventListener('touchend', (e) => {
+    if (!touchSelecting(e) || !pageTarget(e)) return;
+    swallow(e); // also stops the synthetic mouse events and click
+    pick(hoverEl || touchTarget(e));
+  }, { capture: true, passive: false });
+  window.addEventListener('touchcancel', (e) => { if (touchSelecting(e) && pageTarget(e)) swallow(e); }, { capture: true, passive: false });
 
   window.addEventListener('pointermove', (e) => {
     if (!mode && e.altKey && !composer) setMode('peek');
@@ -248,6 +279,12 @@
       case 'composer:submit': return createAnnotation(data.text, data.send);
       case 'composer:draft': if (composer) composer.draft = data.text; return;
       case 'composer:cancel': return closeComposer();
+      case 'composer:parent': {
+        const p = composer?.el?.parentElement;
+        if (!p || p === document.body || p === document.documentElement) return;
+        composer.el = p;
+        return reopenComposer();
+      }
       case 'composer:pickReference': ui.closeCard(); return setMode('reference');
       case 'composer:clearReference': if (composer) composer.reference = null; ui.showReferenceBox(null); return reopenComposer();
       case 'card:close': return closeCard();
@@ -426,17 +463,23 @@
       return { kind: 'error', text: 'Local companion isn\'t connected. Comments still work — copy them as Markdown.', actions: [{ id: 'reconnect', label: 'Reconnect' }] };
     }
     if (!p) {
-      // Agents running in folders that aren't projects yet: the user picks one.
+      // Folders where a Claude Code session runs right now: the user picks the one this page belongs to.
       const candidates = (companion.candidates || []).map((c) => ({ id: `connect:${c.id}`, label: `Connect to ${c.name} (${shortPath(c.workingDirectory)})` }));
-      if (candidates.length) return { kind: 'warn', text: `Which project is ${location.host}?`, actions: candidates };
-      const others = (companion.projects || []).map((x) => ({ id: `add:${x.id}`, label: `Add to ${x.name}` }));
-      return { kind: 'warn', text: `${location.host} isn't connected to a project yet. Open Claude Code in the project folder — this panel will offer to connect it.`, actions: others };
+      if (candidates.length) return { kind: 'warn', text: `Helper connected. Which project is ${location.host}? Pick the folder where Claude Code works on it:`, actions: candidates };
+      return {
+        kind: 'warn',
+        text: `Helper connected, but ${location.host} isn't linked to a project, and no Claude Code session has checked in yet. Start or restart Claude Code in the project folder — it will show up here. Still nothing? Run in a terminal:`,
+        command: STATUS_CMD,
+      };
     }
     const agent = companion.agents?.[p.id];
     const flying = annotations.find((a) => IN_FLIGHT.has(a.status));
     if (flying) return reviewStateView(flying, agent);
     if (agent === 'waiting') return { kind: 'ok', text: `Connected · ${p.name} · an agent is waiting for Fix all` };
     if (projectChats().length) return { kind: 'ok', text: `Connected · ${p.name}` };
+    if (companion.mcp?.[p.id]) {
+      return { kind: 'warn', text: `Claude Code is open in ${p.name}, but it can't be woken automatically (its hooks didn't check in). Restart that session, or type /ui-review in it — then Fix all goes there.` };
+    }
     return { kind: 'warn', text: `No Claude Code session is open in ${p.name}. Open one in ${shortPath(p.workingDirectory)} — Fix all will go there. Or copy as Markdown.` };
   }
 
