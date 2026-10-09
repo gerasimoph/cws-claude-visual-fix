@@ -238,3 +238,42 @@ test('debug state lists chats and MCP sessions for `status`', async () => {
   assert.equal(state.chats[0].project, 'acme');
   assert.equal(state.mcpSessions[0].project, 'acme');
 });
+
+test('/ui-review: with a working doorbell wait_for_review returns "set up" and pins the chat', async () => {
+  bell('here', '/proj');
+  bell('other', '/proj/web');
+  await tick();
+  const a = await agent('/proj');
+  const res = await a.request('waitForReview', { timeoutMs: 5000 });
+  assert.equal(res.ready, true);
+  assert.match(res.text, /This session is set up/);
+  assert.ok(companion.chatList().find((c) => c.id === 'here').claimed);
+});
+
+test('/ui-review without a doorbell keeps waiting, so a review cannot get stuck', async () => {
+  const a = await agent('/proj');
+  const waiting = a.request('waitForReview', { timeoutMs: 5000 });
+  await tick();
+  const sub = await submit('a1');
+  const got = await waiting;
+  assert.equal(got.review.id, sub.reviewId);
+  assert.match(got.text, /call `wait_for_review` again/);
+});
+
+test('page linked to the wrong project: moving it carries the stuck review to the right chat', async () => {
+  saveProjects([
+    { id: 'aso', name: 'aso', localPath: '/mono', workingDirectory: '/mono/apps/aso', origins: ['http://localhost:8081'] },
+  ]);
+  companion.reloadProjects();
+  const shelfBell = bell('shelf', '/mono/apps/book-shelf');
+  await tick();
+  page.set('b1', signature());
+  const sub = await ext.request('review.submit', { origin: 'http://localhost:8081', annotations: [annotationInput('b1', 'FAQ')] });
+  assert.equal(fx.updates.at(-1).waitingFor, 'no_chat');
+
+  const cand = (await ext.request('hello', {})).candidates.find((c) => c.workingDirectory === '/mono/apps/book-shelf');
+  await ext.request('project.connect', { candidateId: cand.id, origin: 'http://localhost:8081' });
+  const r = await shelfBell;
+  assert.equal(r.action, 'ring');
+  assert.match(r.text, new RegExp(sub.reviewId));
+});

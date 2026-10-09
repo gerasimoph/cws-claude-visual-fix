@@ -113,11 +113,15 @@ function connectCompanion() {
     p.onMessage.addListener((msg) => rpc.receive(msg));
     p.onDisconnect.addListener(() => {
       const error = chrome.runtime.lastError?.message || 'Companion exited';
+      const wasConnected = companion.state === 'connected';
       rpc.close();
       if (port === p) { port = null; peer = null; }
       const notInstalled = /not found|forbidden/i.test(error);
       setCompanion({ state: notInstalled ? 'not_installed' : 'disconnected', error, agents: {}, candidates: [], chats: [] });
       if (connecting) { connecting = null; resolve(false); }
+      // The companion exits on purpose when `setup` installs a new version:
+      // reconnect so Chrome starts the new one (a few tries, not forever).
+      if (wasConnected && !notInstalled) scheduleReconnect();
     });
     registerCompanionHandlers(rpc);
     rpc.request('hello', { version: chrome.runtime.getManifest().version }, 5000).then(async (hello) => {
@@ -132,6 +136,15 @@ function connectCompanion() {
     });
   });
   return connecting;
+}
+
+let reconnectTries = [];
+function scheduleReconnect() {
+  const now = Date.now();
+  reconnectTries = reconnectTries.filter((t) => now - t < 60_000);
+  if (reconnectTries.length >= 3) return;
+  reconnectTries.push(now);
+  setTimeout(() => connectCompanion(), 1000 * reconnectTries.length);
 }
 
 function registerCompanionHandlers(rpc) {

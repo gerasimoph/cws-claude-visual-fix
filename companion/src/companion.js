@@ -91,6 +91,7 @@ export class Companion {
     if (this.persist) saveProjects(projects);
     this.projects = projects;
     this.placeAll();
+    this.moveReviews(o, project.id);
     this.notifyProjectsChanged();
     this.pushChats();
     this.dispatch(project.id);
@@ -121,12 +122,23 @@ export class Companion {
     if (this.persist) saveProjects(next);
     this.projects = next;
     this.placeAll();
+    this.moveReviews(o, project.id);
     recordMetric('project_connected', { framework: project.framework || null, via: 'browser' });
     this.notifyProjectsChanged();
     this.pushAgents();
     this.pushChats();
     this.dispatch(project.id);
     return { project };
+  }
+
+  // A page moved to another project: its waiting reviews follow it.
+  moveReviews(origin, projectId) {
+    for (const r of this.reviews.values()) {
+      if (r.origin !== origin || r.status !== 'pending' || r.projectId === projectId) continue;
+      Object.assign(r, { projectId, chatId: null, targetChatId: null, waitingFor: null, rings: 0, ringedAt: null });
+      this.save(r);
+      this.pushReview(r);
+    }
   }
 
   ringNow({ reviewId }) {
@@ -326,8 +338,28 @@ export class Companion {
     const resumable = this.findOrphanedReview(session);
     if (resumable) return this.assign(resumable, session, { resumed: true });
 
+    const bellChat = this.doorbellChatFor(session);
     const pending = this.nextPendingReview(session);
-    if (pending) return this.assign(pending, session);
+    if (pending) {
+      pending.deliveredVia = bellChat ? 'ring' : 'wait';
+      return this.assign(pending, session);
+    }
+
+    // /ui-review in a Claude Code session whose doorbell hook works: no need to
+    // block — pin the session and let Fix all wake it. Without a working
+    // doorbell, fall through and wait here, so a review can't get stuck.
+    if (bellChat) {
+      this.claimChat(bellChat);
+      this.pushChats();
+      const linked = session.projectId
+        ? ''
+        : ' This folder is not linked to a page yet: ask the user to open the app in Chrome and click "Connect to …" in the review panel.';
+      return {
+        review: null,
+        ready: true,
+        text: `This session is set up: when the user presses "Fix all" in the browser, a Browser Feedback notice arrives here with a review_id. Nothing else to do now — tell the user it's ready.${linked}`,
+      };
+    }
 
     return new Promise((resolve) => {
       const waiter = { session, resolve, timer: null };
@@ -421,6 +453,14 @@ export class Companion {
       this.pushChats();
     }
     return { ok: true };
+  }
+
+  // The doorbell chat running in the same folder as this MCP connection.
+  doorbellChatFor(session) {
+    if (!session.cwd) return null;
+    return [...this.chats.values()]
+      .filter((c) => c.bell && c.cwd === session.cwd)
+      .sort((a, b) => b.lastActiveAt - a.lastActiveAt)[0] || null;
   }
 
   claimChat(chat) {

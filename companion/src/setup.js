@@ -5,6 +5,7 @@ import { MCP_SERVER_NAME, VERSION } from './constants.js';
 import { dataDir, socketPath } from './paths.js';
 import { findAgents } from './detect.js';
 import { canConnect } from './host.js';
+import { askHost } from './status.js';
 import { installMachine, registerClaude, printManualSetup, createPrompter } from './connect.js';
 
 export async function setup(opts = {}) {
@@ -22,6 +23,21 @@ export async function setup(opts = {}) {
     else if (!claude) io.print('! Claude Code not found on PATH — register the MCP server with your agent manually (below).');
     printManualSetup(io, mcpCommand, { hasClaude: !!claude });
 
+    // A companion started before this install keeps running the old code until
+    // Chrome restarts it. Ask it to exit; the extension reconnects to the new one.
+    if (await canConnect(socketPath())) {
+      const state = await askHost('debug.state');
+      if (state?.version !== VERSION) {
+        const ok = await askHost('host.restart');
+        if (ok) {
+          io.print(`↻ Restarted the running companion (${state?.version || 'older version'} → ${VERSION})`);
+          await new Promise((r) => setTimeout(r, 1500));
+        } else {
+          io.print('! An older companion is still running. Reload the extension in chrome://extensions (or restart Chrome) to switch to the new version.');
+        }
+      }
+    }
+
     const waitSeconds = opts.wait === undefined ? 20 : Number(opts.wait);
     let browser = await canConnect(socketPath());
     if (!browser && waitSeconds > 0) {
@@ -34,7 +50,8 @@ export async function setup(opts = {}) {
       }
     }
     io.print('');
-    io.print(`Browser connected: ${browser ? 'yes' : 'no'}`);
+    const live = browser ? await askHost('debug.state') : null;
+    io.print(`Browser connected: ${browser ? `yes (companion ${live?.version || 'older version — reload the extension'})` : 'no'}`);
     if (!browser) {
       io.print('  The Chrome extension has not connected yet. Make sure it is installed, then click its toolbar icon');
       io.print('  or open any http://localhost page. Check again with:');

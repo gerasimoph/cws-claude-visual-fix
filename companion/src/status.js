@@ -11,7 +11,7 @@ import { VERSION, MCP_SERVER_NAME } from './constants.js';
 import { claudeDir } from './claude-config.js';
 import { findExecutable } from './detect.js';
 
-function queryHost() {
+export function askHost(method) {
   return new Promise((resolve) => {
     const socket = net.connect(socketPath());
     const done = (v) => { clearTimeout(t); socket.destroy(); resolve(v); };
@@ -19,10 +19,12 @@ function queryHost() {
     socket.once('error', () => done(null));
     socket.once('connect', () => {
       const peer = new RpcPeer(attachJsonLines(socket, (m) => peer.receive(m)), { name: 'status', defaultTimeoutMs: 3000 });
-      peer.request('debug.state', {}).then(done, () => done(null));
+      peer.request(method, {}).then(done, () => done(null));
     });
   });
 }
+
+const queryHost = () => askHost('debug.state');
 
 function hookCount() {
   try {

@@ -392,7 +392,7 @@
       case 'chat_offline': return { kind: 'warn', text: `${name} isn't reachable right now. Send any message in it, or cancel and pick another session.`, actions: [cancel] };
       case 'not_picked_up': return { kind: 'error', text: `Claude didn't pick up the review in ${name}. Check the session, or cancel.`, actions: [cancel] };
       case 'no_chat': return { kind: 'warn', text: 'Waiting for a Claude Code session in this project — it starts as soon as you open one.', actions: [cancel] };
-      default: return { kind: 'warn', text: 'Waiting for your agent to pick up the review (/ui-review).', actions: [cancel] };
+      default: return { kind: 'warn', text: 'Waiting for Claude Code to pick up the review.', actions: [cancel] };
     }
   }
 
@@ -474,6 +474,19 @@
     }
     const agent = companion.agents?.[p.id];
     const flying = annotations.find((a) => IN_FLIGHT.has(a.status));
+    // Claude Code runs in other folders but not in this page's project: the
+    // page is probably linked to the wrong project. Offer to move it.
+    const elsewhere = (companion.candidates || []).filter((c) => c.projectId !== p.id);
+    if (agent !== 'working' && !projectChats().length && !companion.mcp?.[p.id] && elsewhere.length) {
+      return {
+        kind: 'warn',
+        text: `This page is linked to ${p.name}, but Claude Code isn't open there — it's open in ${elsewhere.map((c) => c.name).join(', ')}. Is this page part of that project?`,
+        actions: [
+          ...elsewhere.map((c) => ({ id: `connect:${c.id}`, label: `Move page to ${c.name} (${shortPath(c.workingDirectory)})` })),
+          ...(flying ? [{ id: 'cancel-review', label: 'Cancel review' }] : []),
+        ],
+      };
+    }
     if (flying) return reviewStateView(flying, agent);
     if (agent === 'waiting') return { kind: 'ok', text: `Connected · ${p.name} · an agent is waiting for Fix all` };
     if (projectChats().length) return { kind: 'ok', text: `Connected · ${p.name}` };

@@ -56,6 +56,13 @@ export async function listenAgentSocket(companion, path = socketPath()) {
     // The same local socket serves MCP processes and doorbell hooks.
     const session = companion.attachAgent(peer);
     companion.attachDoorbell(peer);
+    // `setup` asks a running host of an older version to exit; the extension
+    // reconnects and Chrome starts the freshly installed one.
+    peer.handle('host.restart', () => {
+      log('host', 'restart requested by setup');
+      setTimeout(() => process.emit('SIGTERM'), 100);
+      return { ok: true };
+    });
     const close = () => { peer.close('disconnected'); companion.detachAgent(session); peer.onClose?.(); };
     socket.on('close', close);
     socket.on('error', close);

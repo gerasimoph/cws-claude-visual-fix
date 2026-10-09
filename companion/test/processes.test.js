@@ -128,3 +128,18 @@ test('doorbell hook process: started before the companion, exits 2 with the ring
   assert.match(stderr, new RegExp(`review_id "${sub.reviewId}"`));
   assert.equal(stdout, '', 'nothing on stdout');
 });
+
+test('setup can ask a running (older) companion to restart', { timeout: 20_000 }, async (t) => {
+  const home = tempHome();
+  const env = { ...process.env, BROWSER_FEEDBACK_HOME: home };
+  const host = startHost(env);
+  t.after(() => host.proc.kill());
+  await host.peer.request('hello', {});
+  const exited = new Promise((resolve) => host.proc.on('exit', resolve));
+  const { askHost } = await import('../src/status.js');
+  process.env.BROWSER_FEEDBACK_HOME = home;
+  const state = await askHost('debug.state');
+  assert.ok(state.version);
+  assert.deepEqual(await askHost('host.restart'), { ok: true });
+  assert.equal(await exited, 0);
+});
