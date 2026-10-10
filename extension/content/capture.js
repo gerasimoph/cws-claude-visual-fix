@@ -90,16 +90,15 @@
   // the element and, in dev builds, its source file. Synchronous: DOM events
   // dispatch immediately across worlds.
   function probe(el) {
-    if (!el?.setAttribute) return null;
-    const id = Math.random().toString(36).slice(2);
+    if (!(el instanceof Element)) return null;
     let result = null;
     const onResult = (e) => { result = e.detail; };
     document.addEventListener('bf:probe-result', onResult);
     try {
-      el.setAttribute('data-bf-probe', id);
-      document.dispatchEvent(new CustomEvent('bf:probe', { detail: id }));
+      // Dispatched on the element itself: the DOM node is shared between
+      // worlds, so nothing has to be written into the page.
+      el.dispatchEvent(new CustomEvent('bf:probe', { bubbles: true }));
     } finally {
-      el.removeAttribute('data-bf-probe');
       document.removeEventListener('bf:probe-result', onResult);
     }
     try {
@@ -268,5 +267,83 @@
     return diffs;
   }
 
-  BF.capture = { context, signature, label, summary, forClaude, diffSignatures, isVisible, hash, probe };
+  // ---- Hover inspector ----------------------------------------------------
+
+  function parseColor(value) {
+    const m = /rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\)/.exec(value || '');
+    return m ? { r: +m[1], g: +m[2], b: +m[3], a: m[4] === undefined ? 1 : +m[4] } : null;
+  }
+
+  function hex(c) {
+    if (!c) return '';
+    const h = [c.r, c.g, c.b].map((v) => Math.round(v).toString(16).padStart(2, '0')).join('').toUpperCase();
+    return `#${h}${c.a < 1 ? ` · ${Math.round(c.a * 100)}%` : ''}`;
+  }
+
+  // The color actually behind the element: the first non-transparent
+  // background up the tree (white if none).
+  function effectiveBackground(el) {
+    for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
+      const c = parseColor(getComputedStyle(n).backgroundColor);
+      if (c && c.a > 0) return c;
+    }
+    return { r: 255, g: 255, b: 255, a: 1 };
+  }
+
+  function luminance(c) {
+    const ch = [c.r, c.g, c.b].map((v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; });
+    return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+  }
+
+  function contrast(fg, bg) {
+    // Blend a translucent text color over its background first.
+    const f = fg.a < 1 ? { r: fg.r * fg.a + bg.r * (1 - fg.a), g: fg.g * fg.a + bg.g * (1 - fg.a), b: fg.b * fg.a + bg.b * (1 - fg.a) } : fg;
+    const [hi, lo] = [luminance(f), luminance(bg)].sort((a, b) => b - a);
+    return (hi + 0.05) / (lo + 0.05);
+  }
+
+  function sides(cs, prop) {
+    const v = ['top', 'right', 'bottom', 'left'].map((s) => parseFloat(cs.getPropertyValue(`${prop}-${s}${prop === 'border' ? '-width' : ''}`)) || 0);
+    return v;
+  }
+
+  function shorthand(v) {
+    const r = v.map((x) => `${Math.round(x * 10) / 10}`);
+    if (r.every((x) => x === r[0])) return `${r[0]}px`;
+    if (r[0] === r[2] && r[1] === r[3]) return `${r[0]}px ${r[1]}px`;
+    return r.map((x) => `${x}px`).join(' ');
+  }
+
+  function inspect(el) {
+    const cs = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    const fg = parseColor(cs.color);
+    const bg = effectiveBackground(el);
+    const ownBg = parseColor(cs.backgroundColor);
+    const hasText = !!textOf(el);
+    const padding = sides(cs, 'padding');
+    const margin = sides(cs, 'margin');
+    const comps = probe(el)?.components || [];
+    const ratio = fg && hasText ? contrast(fg, bg) : null;
+    return {
+      title: cleanLabel(el),
+      component: comps[0] || null,
+      size: `${Math.round(rect.width)} × ${Math.round(rect.height)}`,
+      textColor: hasText && fg ? { css: cs.color, hex: hex(fg) } : null,
+      background: { css: `rgb(${bg.r}, ${bg.g}, ${bg.b})`, hex: hex(bg), inherited: !(ownBg && ownBg.a > 0) },
+      font: hasText ? {
+        family: cs.fontFamily.split(',')[0].trim().replace(/^["']|["']$/g, ''),
+        size: `${Math.round(parseFloat(cs.fontSize) * 10) / 10}px`,
+        weight: cs.fontWeight,
+        lineHeight: cs.lineHeight === 'normal' ? 'normal' : `${Math.round(parseFloat(cs.lineHeight) * 10) / 10}px`,
+      } : null,
+      padding: padding.some(Boolean) ? shorthand(padding) : null,
+      margin: margin.some(Boolean) ? shorthand(margin) : null,
+      radius: parseFloat(cs.borderTopLeftRadius) ? cs.borderRadius : null,
+      contrast: ratio ? { ratio: Math.round(ratio * 100) / 100, grade: ratio >= 7 ? 'AAA' : ratio >= 4.5 ? 'AA' : ratio >= 3 ? 'AA large' : 'fail' } : null,
+      boxes: { padding, margin, border: sides(cs, 'border') },
+    };
+  }
+
+  BF.capture = { context, signature, label, summary, forClaude, diffSignatures, isVisible, hash, probe, inspect };
 })();

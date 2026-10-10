@@ -78,6 +78,7 @@
   function highlight(el) {
     hoverEl = el;
     ui.showHighlight(el, { kind: mode === 'reference' ? 'ref' : 'select' });
+    try { ui.showInspector(el, BF.capture.inspect(el)); } catch { ui.hideInspector(); }
   }
 
   const swallow = (e) => { e.preventDefault(); e.stopImmediatePropagation(); };
@@ -173,6 +174,7 @@
     }
     setMode(null);
     closeCard();
+    ui.hideInspector();
     composer = { el, reference: null, draft: '' };
     ui.showReferenceBox(null);
     ui.showHighlight(el, { kind: 'select' });
@@ -590,6 +592,7 @@
     }
     ui.renderPins(pins);
     if (composer?.el?.isConnected) ui.showHighlight(composer.el, { kind: 'select' });
+    else if (mode && hoverEl?.isConnected) highlight(hoverEl); // keep highlight + inspector on the element while scrolling
     if (composer?.reference?.isConnected) ui.showReferenceBox(composer.reference);
   }
 

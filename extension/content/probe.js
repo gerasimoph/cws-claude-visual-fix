@@ -1,6 +1,6 @@
 // Runs in the page's main world (manifest "world": "MAIN"): only there are
-// React's internal fiber properties visible. Given an element marked by the
-// isolated content script, it reports the nearest React components and, in
+// React's internal fiber properties visible. For the element a `bf:probe`
+// event is dispatched on (by the isolated content script), it reports the nearest React components and, in
 // dev builds that record it, the source file where the element is written.
 // Read-only; talks to the content script through DOM events with string data.
 (() => {
@@ -50,7 +50,7 @@
   document.addEventListener('bf:probe', (event) => {
     const out = { components: [], source: null };
     try {
-      const el = document.querySelector(`[data-bf-probe="${CSS.escape(String(event.detail))}"]`);
+      const el = event.target instanceof Element ? event.target : null;
       let fiber = el && fiberOf(el);
       for (let hops = 0; fiber && hops < 80 && out.components.length < 6; hops++) {
         if (!out.source) out.source = sourceOf(fiber);
@@ -60,5 +60,6 @@
       }
     } catch {}
     document.dispatchEvent(new CustomEvent('bf:probe-result', { detail: JSON.stringify(out) }));
+    event.stopImmediatePropagation();
   });
 })();

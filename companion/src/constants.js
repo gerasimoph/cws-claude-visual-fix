@@ -1,4 +1,4 @@
-export const VERSION = '0.2.0';
+export const VERSION = '0.2.1';
 export const PRODUCT = 'browser-feedback';
 export const HOST_NAME = 'com.browser_feedback.companion';
 export const MCP_SERVER_NAME = 'browser-feedback';

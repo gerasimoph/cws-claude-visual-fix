@@ -44,6 +44,29 @@ test('copy mode: Copy for Claude with preamble and code hints, then Sent → Cha
   await page.waitForSelector('browser-feedback-root', { state: 'attached' });
   const composer = page.locator('browser-feedback-root .composer textarea');
 
+  // Hover inspector while Alt is held: element, size, colors, contrast, font;
+  // the React component name when the page has one.
+  const h2box = await page.locator('.card.pro h2').boundingBox();
+  await page.keyboard.down('Alt');
+  await page.mouse.move(h2box.x + 5, h2box.y + 5);
+  await page.mouse.move(h2box.x + 10, h2box.y + 8);
+  const insp = page.locator('browser-feedback-root .insp');
+  await insp.waitFor();
+  const text = await insp.textContent();
+  assert.match(text, /^h2/);
+  assert.match(text, /Text color#000000/);
+  assert.match(text, /Background \(behind\)#FFFFFF/);
+  assert.match(text, /Contrast21:1 AAA/);
+  assert.match(text, /Font size|Font24px · 700/);
+  const card = await page.locator('.card.pro').boundingBox();
+  await page.mouse.move(card.x + 20, card.y + card.height - 20); // the card's own padding area
+  await page.locator('browser-feedback-root .insp .c', { hasText: '<PricingCard>' }).waitFor();
+  assert.match(await insp.textContent(), /Padding24px/);
+  assert.match(await insp.textContent(), /Radius12px/);
+  if (process.env.E2E_SHOT) await page.screenshot({ path: process.env.E2E_SHOT });
+  await page.keyboard.up('Alt');
+  await insp.waitFor({ state: 'hidden' });
+
   // Two comments; "↑ Parent" lifts each from the heading to its card.
   const pairs = [['.card.pro h2', 'Сделай карточку такой же высоты, как Monthly'], ['.card.monthly h2', 'Убери рамку']];
   for (const [i, [sel, text]] of pairs.entries()) {
@@ -85,7 +108,6 @@ test('copy mode: Copy for Claude with preamble and code hints, then Sent → Cha
   const anns = await storage();
   assert.equal(anns[1].status, 'sent', 'untouched comment stays Sent');
   assert.ok(anns[0].diffs.some((d) => d.prop === 'height'));
-  if (process.env.E2E_SHOT) { await page.waitForTimeout(500); await page.screenshot({ path: process.env.E2E_SHOT }); }
 
   await page.locator(`browser-feedback-root .item[data-id="${anns[0].id}"] button[data-act="accept"]`).click();
   await waitFor(async () => (await storage())?.[0].status === 'accepted', 'accepted');

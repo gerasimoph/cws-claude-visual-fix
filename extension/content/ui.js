@@ -26,6 +26,20 @@
 .hl.flash { border-color: #10b981; background: rgba(16,185,129,.12); }
 .hl-label { position: absolute; top: -22px; left: -2px; background: #6366f1; color: #fff; font-size: 11px; padding: 2px 6px; border-radius: 3px; white-space: nowrap; }
 .hl.ref .hl-label { background: #f59e0b; }
+.box-pad, .box-mar { position: fixed; pointer-events: none; display: none; border-style: solid; box-sizing: border-box; }
+.box-pad { border-color: rgba(16,185,129,.28); }
+.box-mar { border-color: rgba(245,158,11,.22); }
+.insp { position: fixed; width: 264px; pointer-events: none; display: none; background: #fff; color: #111827; border-radius: 10px;
+  box-shadow: 0 8px 30px rgba(0,0,0,.28), 0 0 0 1px rgba(0,0,0,.06); padding: 10px 12px 8px; font-size: 12px; }
+.insp .t { font-weight: 700; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.insp .c { color: #4f46e5; font-weight: 600; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.insp .dim { color: #374151; margin: 1px 0 6px; font-variant-numeric: tabular-nums; }
+.insp .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 2px 0; }
+.insp .k { color: #6b7280; flex: none; }
+.insp .v { display: flex; align-items: center; gap: 6px; min-width: 0; font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; color: #111827; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.insp .sw { width: 14px; height: 14px; border-radius: 3px; border: 1px solid rgba(0,0,0,.15); flex: none; }
+.insp .grade { font: 600 10.5px -apple-system, sans-serif; padding: 0 5px; border-radius: 4px; background: #d1fae5; color: #047857; }
+.insp .grade.warn { background: #fef3c7; color: #b45309; } .insp .grade.bad { background: #fee2e2; color: #b91c1c; }
 .ref-box { position: fixed; border: 2px dashed #f59e0b; border-radius: 3px; pointer-events: none; display: none; }
 .pin { position: fixed; pointer-events: auto; cursor: pointer; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px 11px 11px 2px;
   display: flex; align-items: center; justify-content: center; gap: 3px; font-size: 12px; font-weight: 600; color: #fff; background: #111827;
@@ -109,8 +123,11 @@ button.icon { border: none; background: none; padding: 0 4px; color: #6b7280; fo
       this.root = this.host.attachShadow({ mode: 'open' });
       this.root.innerHTML = `<style>${STYLES}</style><div class="layer">
         <div class="pins"></div>
+        <div class="box-mar"></div>
+        <div class="box-pad"></div>
         <div class="ref-box"></div>
         <div class="hl"><div class="hl-label"></div></div>
+        <div class="insp"></div>
         <div class="selecting-tip">Click an element to comment · ↑ parent · ↓ child · Esc cancel</div>
         <div class="panel-slot"></div>
         <div class="card-slot"></div>
@@ -151,7 +168,64 @@ button.icon { border: none; background: none; padding: 0 4px; color: #6b7280; fo
       lbl.style.top = r.top < 26 ? `${r.height + 4}px` : '-22px';
     }
 
-    hideHighlight() { this.$('.hl').style.display = 'none'; }
+    hideHighlight() { this.$('.hl').style.display = 'none'; this.hideInspector(); }
+
+    // Hover inspector: what the element looks like right now, plus its
+    // padding (green) and margin (orange) like DevTools.
+    showInspector(el, info) {
+      const r = el.getBoundingClientRect();
+      const [pt, pr, pb, pl] = info.boxes.padding;
+      const [bt, br, bb, bl] = info.boxes.border;
+      const [mt, mr, mb, ml] = info.boxes.margin;
+      Object.assign(this.$('.box-pad').style, {
+        display: pt + pr + pb + pl ? 'block' : 'none',
+        left: `${r.left + bl}px`, top: `${r.top + bt}px`, width: `${Math.max(0, r.width - bl - br)}px`, height: `${Math.max(0, r.height - bt - bb)}px`,
+        borderWidth: `${pt}px ${pr}px ${pb}px ${pl}px`,
+      });
+      Object.assign(this.$('.box-mar').style, {
+        display: mt + mr + mb + ml ? 'block' : 'none',
+        left: `${r.left - ml}px`, top: `${r.top - mt}px`, width: `${r.width + ml + mr}px`, height: `${r.height + mt + mb}px`,
+        borderWidth: `${Math.max(0, mt)}px ${Math.max(0, mr)}px ${Math.max(0, mb)}px ${Math.max(0, ml)}px`,
+      });
+      const row = (k, v) => `<div class="row"><span class="k">${esc(k)}</span><span class="v">${v}</span></div>`;
+      const color = (c) => `<span class="sw" style="background:${esc(c.css)}"></span>${esc(c.hex)}`;
+      const rows = [];
+      if (info.textColor) rows.push(row('Text color', color(info.textColor)));
+      rows.push(row(info.background.inherited ? 'Background (behind)' : 'Background', color(info.background)));
+      if (info.contrast) {
+        const g = info.contrast.grade;
+        rows.push(row('Contrast', `${info.contrast.ratio}:1 <span class="grade${g === 'fail' ? ' bad' : g === 'AA large' ? ' warn' : ''}">${esc(g)}</span>`));
+      }
+      if (info.font) {
+        rows.push(row('Font family', esc(info.font.family)));
+        rows.push(row('Font', esc(`${info.font.size} · ${info.font.weight} · lh ${info.font.lineHeight}`)));
+      }
+      if (info.padding) rows.push(row('Padding', esc(info.padding)));
+      if (info.margin) rows.push(row('Margin', esc(info.margin)));
+      if (info.radius) rows.push(row('Radius', esc(info.radius)));
+      const card = this.$('.insp');
+      card.innerHTML = `${info.component ? `<div class="c">&lt;${esc(info.component)}&gt;</div>` : ''}<div class="t">${esc(info.title)}</div><div class="dim">${esc(info.size)}</div>${rows.join('')}`;
+      card.style.display = 'block';
+      // Below, above, right, left — and only if nothing fits, over the element.
+      const h = card.offsetHeight;
+      const w = card.offsetWidth;
+      const gap = 10;
+      const clampX = (x) => Math.min(innerWidth - w - 8, Math.max(8, x));
+      const clampY = (y) => Math.min(innerHeight - h - 8, Math.max(8, y));
+      let left = clampX(r.left);
+      let top;
+      if (r.bottom + gap + h <= innerHeight - 8) top = r.bottom + gap;
+      else if (r.top - gap - h >= 8) top = r.top - gap - h;
+      else if (r.right + gap + w <= innerWidth - 8) { left = r.right + gap; top = clampY(r.top); }
+      else if (r.left - gap - w >= 8) { left = r.left - gap - w; top = clampY(r.top); }
+      else top = clampY(r.top + gap);
+      card.style.top = `${top}px`;
+      card.style.left = `${left}px`;
+    }
+
+    hideInspector() {
+      for (const s of ['.insp', '.box-pad', '.box-mar']) this.$(s).style.display = 'none';
+    }
 
     flash(el) {
       this.showHighlight(el, { kind: 'flash' });
