@@ -276,7 +276,6 @@
       path: location.pathname,
       title: document.title.slice(0, 80),
       viewport: `${innerWidth}×${innerHeight}`,
-      lang: (navigator.language || 'en').toLowerCase().startsWith('ru') ? 'ru' : 'en',
     };
     await writeClipboard(BF.capture.forClaude(list, page));
     const patches = list.map((a) => {

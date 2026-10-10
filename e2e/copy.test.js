@@ -64,17 +64,18 @@ test('copy mode: Copy for Claude with preamble and code hints, then Sent → Cha
   await waitFor(async () => (await storage())?.every((a) => a.status === 'sent'), 'sent status');
 
   const md = await page.evaluate(() => navigator.clipboard.readText());
-  assert.match(md, /^# Правки интерфейса: Pricing — fixture/);
-  assert.match(md, /Пройдись по ним по порядку и внеси правки в код/);
-  assert.match(md, /В конце ответь коротким списком/);
+  // Russian browser, Russian comments — the instructions for Claude are still English.
+  assert.match(md, /^# UI fixes: Pricing — fixture/);
+  assert.match(md, /Go through them one by one and change the code/);
+  assert.match(md, /Reply in the language the comments are written in/);
   assert.match(md, /## 1\. «Сделай карточку такой же высоты, как Monthly»/);
-  assert.match(md, /Компонент: `PricingCard` \(внутри `PricingGrid` → `App`\)/);
-  assert.match(md, /Файл: `\/src\/components\/PricingCard\.tsx:12`/);
+  assert.match(md, /Component: `PricingCard` \(inside `PricingGrid` → `App`\)/);
+  assert.match(md, /Source: `\/src\/components\/PricingCard\.tsx:12`/);
   assert.match(md, /Test id: `pro-card`/);
-  assert.doesNotMatch(md, /Под заголовком: «Monthly»/, "a neighbouring card's title is not this card's heading");
-  assert.match(md, /Сейчас: \d+×\d+ px; padding 24px/);
+  assert.doesNotMatch(md, /Under heading: «Monthly»/, "a neighbouring card's title is not this card's heading");
+  assert.match(md, /Now: \d+×\d+ px; padding 24px/);
   assert.match(md, /## 2\. «Убери рамку»/);
-  assert.match(md, /Элемент: `div\.card\.monthly`/);
+  assert.match(md, /Element: `div\.card\.monthly`/);
   assert.doesNotMatch(md, /css-146c3p1|r-color-1grp8yp/, 'generated class hashes are useless to Claude');
   t.diagnostic(`\n${md}`);
 
