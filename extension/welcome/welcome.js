@@ -9,11 +9,10 @@ $('copy').onclick = async () => {
 
 function show(companion) {
   const ok = companion?.state === 'connected';
-  $('step-companion').className = `step ${ok ? 'done' : 'active'}`;
-  $('step-companion').querySelector('.mark').textContent = ok ? '✓' : '2';
-  $('step-use').className = `step${ok ? ' active' : ''}`;
+  $('step-companion').className = `step${ok ? ' done' : ''}`;
+  $('step-companion').querySelector('.mark').textContent = ok ? '✓' : '+';
   $('status').className = `status${ok ? ' ok' : ''}`;
-  $('status').textContent = ok ? 'Local helper connected.' : 'Waiting for the local helper… this page updates by itself.';
+  $('status').textContent = ok ? 'Local helper connected — Fix all is available.' : 'Not installed — copy mode works without it. This page updates by itself once it is.';
 }
 
 // Keep trying while the page is open: once `setup` has run, the next

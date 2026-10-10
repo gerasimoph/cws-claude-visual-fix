@@ -1,6 +1,6 @@
 {
   "name": "browser-feedback",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Local companion for the Browser Feedback Chrome extension: native messaging host + MCP server for coding agents.",
   "type": "module",
   "bin": { "browser-feedback": "bin/browser-feedback.js" },

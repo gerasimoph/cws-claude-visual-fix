@@ -34,8 +34,8 @@ async function render() {
   const enabled = await enabledHere();
   const project = (companion.projects || []).find((p) => (p.origins || []).includes(origin));
 
-  $('dot').className = `dot ${companion.state === 'connected' ? 'ok' : companion.state === 'not_installed' ? 'warn' : 'error'}`;
-  $('version').textContent = companion.state === 'connected' ? `helper connected · ${companion.version}` : companion.state === 'not_installed' ? 'helper not installed' : 'helper not connected';
+  $('dot').className = 'dot ok';
+  $('version').textContent = companion.state === 'connected' ? `+ Claude Code helper ${companion.version}` : 'copy mode';
 
   // This tab
   const tabEl = $('tab');
@@ -48,6 +48,8 @@ async function render() {
       if (granted) await chrome.runtime.sendMessage({ type: 'site.enable', tabId: tab.id });
       render();
     };
+  } else if (companion.state !== 'connected') {
+    tabEl.innerHTML = `<div><strong>${esc(new URL(origin).host)}</strong></div><div class="muted">Alt+click elements to comment, then press Copy for Claude in the review panel and paste into Claude.</div>`;
   } else if (project) {
     const agent = companion.agents?.[project.id];
     const chats = (companion.chats || []).filter((c) => c.projectId === project.id);
@@ -66,11 +68,10 @@ async function render() {
   // Companion
   const comp = $('companion');
   if (companion.state === 'connected') comp.innerHTML = '';
-  else if (companion.state === 'not_installed') {
-    comp.innerHTML = `<div><strong>One step left</strong></div><div class="muted">Paste this into Claude Code — it installs the local companion. Comments and Copy as Markdown already work.</div><code>${esc(INSTALL_PROMPT)}</code><button id="retry">Retry</button> <a href="../welcome/welcome.html" target="_blank">Setup guide</a>`;
+  else {
+    // Copy mode needs nothing else; the helper is an optional extra.
+    comp.innerHTML = `<details><summary class="muted">Optional: let Claude Code fix comments by itself</summary><div class="muted">Paste into Claude Code once to install the local helper; then Fix all sends comments to your session directly.</div><code>${esc(INSTALL_PROMPT)}</code><button id="retry">Check again</button></details>`;
     comp.querySelector('code').after(copyButton(INSTALL_PROMPT));
-  } else {
-    comp.innerHTML = `<div>Local companion isn't connected.</div><div class="muted">${esc(companion.error || '')}</div><button id="retry">Reconnect</button>`;
   }
   $('retry')?.addEventListener('click', async () => { await chrome.runtime.sendMessage({ type: 'companion.reconnect' }); render(); });
 

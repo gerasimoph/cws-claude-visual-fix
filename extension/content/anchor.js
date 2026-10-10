@@ -8,7 +8,8 @@
   const TEST_ATTRS = ['data-testid', 'data-test-id', 'data-test', 'data-cy', 'data-qa', 'data-component', 'data-slot'];
   const LABEL_ATTRS = ['aria-label', 'name', 'title', 'alt', 'placeholder', 'role'];
   // Generated class names (CSS modules, styled-components, emotion…) are unstable.
-  const HASHED_CLASS = /^(css|sc|jsx|emotion|svelte|astro|tw)-[a-zA-Z0-9]{4,}$|__[a-zA-Z0-9_-]{5}$|^_[a-zA-Z0-9]{5,}$|^[a-zA-Z]{1,3}[0-9][a-zA-Z0-9]{4,}$/;
+  // React Native Web emits atomic classes like css-146c3p1 and r-color-1grp8yp.
+  const HASHED_CLASS = /^(css|sc|jsx|emotion|svelte|astro|tw)-[a-zA-Z0-9]{4,}$|^r-[a-zA-Z]+(-[a-zA-Z0-9]+)*-[a-z0-9]{5,}$|^r-[a-z0-9]{6,}$|__[a-zA-Z0-9_-]{5}$|^_[a-zA-Z0-9]{5,}$|^[a-zA-Z]{1,3}[0-9][a-zA-Z0-9]{4,}$/;
 
   function norm(s, max = 120) {
     return String(s || '').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -158,5 +159,5 @@
     return hits[0] || null;
   }
 
-  BF.anchor = { create, resolve, textOf, roleOf, accessibleName, norm, isOwnUi, structuralPath };
+  BF.anchor = { create, resolve, textOf, roleOf, accessibleName, norm, isOwnUi, structuralPath, stableClasses };
 })();

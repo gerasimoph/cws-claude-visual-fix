@@ -18,9 +18,21 @@
   <header><span class="logo-icon" aria-hidden="true"></span><h1>Acme</h1></header>
   <main>
     <section class="grid">
-      <div class="card monthly"><h2>Monthly</h2><p>$10/mo</p><button class="cta">Choose</button></div>
+      <div class="card monthly css-146c3p1 r-color-1grp8yp"><h2>Monthly</h2><p>$10/mo</p><button class="cta">Choose</button></div>
       <div class="card pro" data-testid="pro-card"><h2>Pro</h2><p>$20/mo</p><button class="cta" onclick="window.__clicked = true" ontouchstart="window.__touched = true">Choose</button></div>
     </section>
   </main>
+  <script>
+    // What a React dev build leaves on DOM nodes: a fiber chain with component
+    // types and (React ≤18) the JSX source location.
+    (function () {
+      function App() {} function PricingGrid() {} function PricingCard() {} function View() {}
+      var app = { type: App, return: null };
+      var grid = { type: PricingGrid, return: app };
+      var card = { type: PricingCard, return: grid, _debugSource: { fileName: '/src/components/PricingCard.tsx', lineNumber: 12 } };
+      var view = { type: View, return: card, _debugSource: { fileName: '/app/node_modules/react-native-web/dist/View.js', lineNumber: 1 } };
+      document.querySelector('.card.pro')['__reactFiber$e2e'] = { type: 'div', return: view };
+    })();
+  </script>
 </body>
 </html>

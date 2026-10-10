@@ -12,7 +12,7 @@
   const INSTALL_PROMPT = globalThis.BFOnboarding.installPrompt(chrome.runtime.id);
   const STATUS_CMD = 'node ~/.browser-feedback/app/bin/browser-feedback.js status';
   const IN_FLIGHT = new Set(['queued', 'working', 'verifying']);
-  const CAN_ACCEPT = new Set(['fixed', 'changed_check', 'no_change']);
+  const CAN_ACCEPT = new Set(['fixed', 'changed_check', 'no_change', 'sent']);
   const { redactUrl } = globalThis.BFRedact;
 
   let annotations = [];
@@ -176,14 +176,14 @@
     composer = { el, reference: null, draft: '' };
     ui.showReferenceBox(null);
     ui.showHighlight(el, { kind: 'select' });
-    ui.openComposer(el);
+    ui.openComposer(el, { sendHint: integrationReady() ? 'fix now' : 'add & copy' });
   }
 
   function reopenComposer() {
     if (!composer) return;
     if (!composer.el.isConnected) { closeComposer(); return; }
     ui.showHighlight(composer.el, { kind: 'select' });
-    ui.openComposer(composer.el, { reference: composer.reference, draft: composer.draft });
+    ui.openComposer(composer.el, { reference: composer.reference, draft: composer.draft, sendHint: integrationReady() ? 'fix now' : 'add & copy' });
   }
 
   function closeComposer() {
@@ -222,13 +222,18 @@
       context: BF.capture.context(el),
       referenceAnchor: reference ? BF.anchor.create(reference) : null,
       referenceContext: reference ? BF.capture.context(reference) : null,
-      screenshot: await screenshotOf(el, { maxWidth: 800 }),
+      // Only the agent (Fix all) uses screenshots; copy mode skips the capture
+      // and the UI flicker that comes with it.
+      screenshot: integrationReady() ? await screenshotOf(el, { maxWidth: 800 }) : null,
     };
     resolved.set(annotation.id, { el, method: 'picked', at: Date.now() });
     const res = await send({ type: 'ann.create', annotation });
     if (!res?.ok) { ui.toast(`Couldn't save the comment: ${res?.error || 'unknown error'}`); return; }
     if (!prefs.panelOpen) setPrefs({ panelOpen: true });
-    if (sendNow) await fixAll([annotation.id]);
+    if (sendNow) {
+      if (integrationReady()) await fixAll([annotation.id]);
+      else await copyForClaude();
+    }
   }
 
   // ---------------------------------------------------------------- actions
@@ -246,22 +251,40 @@
     ui.toast(res.agentWaiting ? `Sent ${n} to ${chat ? `«${chatName(chat)}»` : 'your agent'}.` : chat ? `Queued for «${chatName(chat)}».` : 'Queued — open Claude Code in the project folder to start.', res.agentWaiting ? 2600 : 5000);
   }
 
-  async function copyMarkdown() {
-    const open = annotations.filter((a) => a.status === 'open');
-    const list = open.length ? open : annotations;
-    const md = BF.capture.markdown(list, ORIGIN);
+  async function writeClipboard(text) {
     try {
-      await navigator.clipboard.writeText(md);
+      await navigator.clipboard.writeText(text);
     } catch {
       const ta = document.createElement('textarea');
-      ta.value = md;
+      ta.value = text;
       ta.style.cssText = 'position:fixed;opacity:0;';
       document.body.appendChild(ta);
       ta.select();
       document.execCommand('copy');
       ta.remove();
     }
-    ui.toast(`Copied ${list.length} comment${list.length === 1 ? '' : 's'} as Markdown.`);
+  }
+
+  // The main path: copy the open comments as instructions for Claude, then
+  // mark them "Sent" and watch the page for the change to land.
+  async function copyForClaude() {
+    const open = annotations.filter((a) => a.status === 'open');
+    const list = open.length ? open : annotations.filter((a) => a.status !== 'accepted');
+    if (!list.length) return;
+    const page = {
+      url: redactUrl(location.origin + location.pathname),
+      path: location.pathname,
+      title: document.title.slice(0, 80),
+      viewport: `${innerWidth}×${innerHeight}`,
+      lang: (navigator.language || 'en').toLowerCase().startsWith('ru') ? 'ru' : 'en',
+    };
+    await writeClipboard(BF.capture.forClaude(list, page));
+    const patches = list.map((a) => {
+      const el = a.path === location.pathname ? elementFor(a, { force: true }) : null;
+      return { id: a.id, patch: { status: 'sent', sentAt: Date.now(), sentBaseline: el ? BF.capture.signature(el) : null, diffs: [], statusDetail: '' } };
+    });
+    await send({ type: 'ann.patchMany', origin: ORIGIN, patches });
+    ui.toast(`Copied ${list.length} comment${list.length === 1 ? '' : 's'} — paste into Claude (${navigator.platform.includes('Mac') ? '⌘' : 'Ctrl+'}V). Pins turn to "Changed — check" when the page updates.`, 5000);
   }
 
   function focusAnnotation(id) {
@@ -299,9 +322,9 @@
       case 'item:focus': return focusAnnotation(data.id);
       case 'item:accept': return send({ type: 'ann.accept', origin: ORIGIN, id: data.id });
       case 'item:delete': closeCard(); return send({ type: 'ann.delete', origin: ORIGIN, id: data.id });
-      case 'item:retry': return send({ type: 'ann.update', origin: ORIGIN, id: data.id, patch: { status: 'open', reviewId: null, summary: '', statusDetail: '', diffs: [], checks: [] } });
+      case 'item:retry': return send({ type: 'ann.update', origin: ORIGIN, id: data.id, patch: { status: 'open', reviewId: null, summary: '', statusDetail: '', diffs: [], checks: [], sentBaseline: null } });
       case 'panel:fixall': return fixAll();
-      case 'panel:copy': return copyMarkdown();
+      case 'panel:copy': return copyForClaude();
       case 'panel:clearDone': return send({ type: 'ann.clearDone', origin: ORIGIN });
       case 'panel:close': return setPrefs({ panelOpen: false });
       case 'panel:collapse': return setPrefs({ collapsed: !prefs.collapsed });
@@ -363,7 +386,7 @@
       diffs: a.diffs,
       meta: !onPage ? `on ${a.path}` : missing ? 'element not found' : '',
       canAccept: CAN_ACCEPT.has(a.status),
-      canRetry: ['failed', 'changed_check', 'no_change'].includes(a.status) || (IN_FLIGHT.has(a.status) && companion.state !== 'connected'),
+      canRetry: ['failed', 'changed_check', 'no_change', 'sent'].includes(a.status) || (IN_FLIGHT.has(a.status) && companion.state !== 'connected'),
       canDelete: !IN_FLIGHT.has(a.status),
     };
   }
@@ -372,9 +395,20 @@
   // icon or uses the shortcut on this tab) — localhost host permissions are not enough.
   const SCREENSHOT_NOTE = 'Screenshots are off for this tab: click the Browser Feedback toolbar icon once to turn them on.';
 
+  // Fix all needs the optional local helper and a reachable Claude Code
+  // session; everyone else uses Copy for Claude.
+  function integrationReady() {
+    const p = project();
+    if (companion.state !== 'connected' || !p) return false;
+    return !!(projectChats().length || companion.mcp?.[p.id] || companion.agents?.[p.id]);
+  }
+
   function connectionView() {
+    // Copy mode needs no setup: say nothing about the helper unless it's in use.
+    const inFlight = annotations.some((a) => IN_FLIGHT.has(a.status));
+    if (companion.state !== 'connected' && !inFlight) return { kind: 'ok', text: '' };
     const view = baseConnectionView();
-    if (screenshots.ok === false && /activeTab|all_urls/.test(screenshots.error || '')) view.note = SCREENSHOT_NOTE;
+    if (integrationReady() && screenshots.ok === false && /activeTab|all_urls/.test(screenshots.error || '')) view.note = SCREENSHOT_NOTE;
     if (view.note && !view.text) view.text = ' ';
     return view;
   }
@@ -506,6 +540,12 @@
     setPrefs({ panelOpen: true, connectOffered: { ...offered, [ORIGIN]: Date.now() } });
   }
 
+  function countText(open) {
+    const sent = annotations.filter((a) => a.status === 'sent').length;
+    const check = annotations.filter((a) => a.status === 'changed_check' || a.status === 'fixed').length;
+    return [open && `${open} open`, sent && `${sent} sent`, check && `${check} to check`].filter(Boolean).join(' · ') || '0 open';
+  }
+
   function render() {
     maybeOfferConnect();
     renderPins();
@@ -522,11 +562,13 @@
       open: prefs.panelOpen,
       collapsed: prefs.collapsed,
       title: project()?.name || location.host,
-      countText: running ? `${inFlight.length} running` : `${open} open`,
+      countText: running ? `${inFlight.length} running` : countText(open),
       connection: connectionView(),
       items,
       running,
-      fixAllCount: companion.state === 'connected' && project() ? open : 0,
+      fixAllCount: integrationReady() ? open : 0,
+      showFixAll: integrationReady(),
+      copyCount: open || annotations.filter((a) => a.status !== 'accepted').length,
       target: targetView(),
       hasDone: annotations.some((a) => a.status === 'accepted' || a.status === 'no_change'),
     });
@@ -586,9 +628,23 @@
     return `${BF.capture.hash(el.outerHTML)}:${Math.round(r.width)}x${Math.round(r.height)}`;
   }
 
+  const sentChanges = new Map(); // id -> consecutive ticks with a difference
+
   function watchForChanges() {
     for (const a of annotations) {
       if (a.path !== location.pathname) continue;
+      // Copy mode: the page updated after the comments went to Claude.
+      if (a.status === 'sent' && a.sentBaseline) {
+        const diffs = BF.capture.diffSignatures(a.sentBaseline, BF.capture.signature(elementFor(a)));
+        const ticks = diffs.length ? (sentChanges.get(a.id) || 0) + 1 : 0;
+        sentChanges.set(a.id, ticks);
+        // Two ticks in a row: ignore the half-rendered moment of a hot reload.
+        if (ticks >= 2) {
+          sentChanges.delete(a.id);
+          send({ type: 'ann.update', origin: ORIGIN, id: a.id, patch: { status: 'changed_check', diffs: diffs.slice(0, 8), statusDetail: 'Changed after you sent it — check it on the page' } });
+        }
+        continue;
+      }
       if (a.status === 'queued' || a.status === 'working') {
         const fp = fingerprint(elementFor(a));
         if (!changeWatch.has(a.id)) changeWatch.set(a.id, fp);

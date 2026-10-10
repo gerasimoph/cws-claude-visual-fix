@@ -12,32 +12,22 @@ Chrome extension ──Native Messaging──▶ companion host ◀──unix so
 - **companion/** — Node ≥ 18, без зависимостей. `host` (запускает Chrome), `mcp` (запускает агент), `connect`, `status`, `stats`.
 - **shared/redact.js** — фильтрация секретов, копируется в обе части (`npm run sync-shared`).
 
-## Установка
+## Как пользоваться (режим копирования — без установки)
 
-1. **Расширение.** Сейчас: `chrome://extensions` → Developer mode → Load unpacked → папка `extension/` (ID фиксирован ключом в manifest: `diidngfppbepogdmihpnfhfekeemedme`). Потом — Chrome Web Store.
-2. **Одна фраза для Claude Code.** При установке открывается страница-приветствие с фразой и кнопкой Copy (она же есть в popup и в панели). Пользователь вставляет её в Claude Code. Агент читает [`INSTALL.md`](INSTALL.md) и запускает:
-   ```bash
-   npx -y github:gerasimoph/cws-claude-visual-fix setup --yes --extension-id <id>
-   ```
-   `setup` ставит всё на уровне машины: companion в `~/.browser-feedback`, native host для Chrome/Chromium/Brave/Edge, MCP-сервер `browser-feedback` в Claude Code (user scope) и `/ui-review`. Затем ждёт, пока расширение подключится: страница-приветствие сама переключается в «connected».
-3. **Проект подключается из браузера.** Один раз перезапустить Claude Code в папке проекта. Панель на `localhost` спрашивает «Which project is localhost:5173? — Connect to acme-web». Это подтверждение по PRD §14.3, только в браузере вместо терминала.
-4. ⌥/Alt+клик (↑ — родитель) → текст → Enter, затем **Fix all**. Pins: Queued → Working → Verifying → Fixed / Changed — check / Failed → Accept.
+1. Расширение: `chrome://extensions` → Developer mode → Load unpacked → папка `extension/`. Работает на `localhost` сразу; другие сайты — «Enable on this site» в popup.
+2. На странице: ⌥/Alt+клик по элементу (↑ или «↑ Parent» — блок крупнее), текст правки, Enter. Сколько угодно комментариев. В DevTools device mode: Alt+Shift+C, затем тап.
+3. **Copy for Claude** → вставить в Claude (Claude Code, приложение Claude или любой другой агент). В буфере — преамбула («пройдись по каждому комментарию, внеси правки, отчитайся списком») и по каждому комментарию подсказки для поиска кода: React-компонент и файл (в dev-сборке), заголовок секции, текст, test id, размер и ключевые стили. Сгенерированные классы (`css-…`, `r-…`) не попадают. Язык преамбулы — по языку браузера (ru/en).
+4. Комментарии получают статус **Sent to Claude**. Когда страница обновится (HMR), расширение само замечает изменение элемента: **Changed — check** с тем, что поменялось. Дальше **Accept** или **Reopen**.
 
-### Куда уходит Fix all
+## Опционально: Claude Code правит сам (Fix all)
 
-`setup` ставит в `~/.claude/settings.json` хук-«звонок» (`asyncRewake`) на SessionStart, UserPromptSubmit и Stop. Каждый чат Claude Code сообщает companion свой `session_id`, папку и название и ждёт в фоне. По Fix all companion выбирает чат и «звонит»: хук завершается с кодом 2, Claude просыпается в этом чате и забирает review через MCP (`wait_for_review` с `review_id`). Данных страницы в звонке нет.
-
-Как выбирается чат: выбранный в панели («Fix all → …») → закреплённый через `/ui-review` → работающий в папке dev server → последний активный. Занятый чат не прерывается: review ждёт конца текущего хода (есть «Send now»). Если папка выбранного чата не совпадает с папкой процесса, который слушает порт страницы (git worktree, вторая копия репо), панель предупреждает: правки не появятся на странице.
-
-Агенты без хуков (Codex и др.) работают по-старому: `wait_for_review` в цикле.
-
-**В проект не пишется ни одного файла.** Пакета `browser-feedback` в npm нет, `npx` работает из GitHub (репозиторий приватный — нужен git-доступ). `setup` нужно запускать на машине с Chrome, не в облачной сессии. Ручной путь для одного проекта остаётся: `browser-feedback connect`.
+Одна фраза для Claude Code (есть на приветственной странице и в popup) ставит локальный helper: native messaging host, MCP-сервер и хуки-«звонок». Тогда появляется кнопка **Fix all**: review уходит в сессию Claude Code напрямую, без копирования, с проверкой результата на странице. Подробности — [`INSTALL.md`](INSTALL.md); диагностика — `node ~/.browser-feedback/app/bin/browser-feedback.js status`.
 
 ## Тесты
 
 ```bash
 npm install          # playwright-core для e2e
-npm test             # unit + интеграция реальных процессов host ↔ MCP (45 тестов)
+npm test             # unit + интеграция реальных процессов host ↔ MCP (45 тестов; e2e: копирование, интеграция, touch)
 npm run test:e2e     # полный цикл в настоящем Chromium с расширением и native host
 ```
 

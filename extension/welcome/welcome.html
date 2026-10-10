@@ -9,28 +9,38 @@
 <body>
   <main>
     <h1>Browser Feedback for Coding Agents</h1>
-    <p class="lead">Leave comments on your running app. Your coding agent fixes them — and the result is checked on the page.</p>
+    <p class="lead">Point at what's wrong on your running app, say what should change, and hand it to Claude in one paste.</p>
 
     <ol class="steps">
       <li class="step done">
         <span class="mark">✓</span>
         <div><h2>Extension installed</h2><p class="muted">Comments and Copy as Markdown already work on any localhost page.</p></div>
       </li>
-      <li class="step" id="step-companion">
+      <li class="step active">
         <span class="mark">2</span>
         <div>
-          <h2>Paste this into Claude Code</h2>
-          <p class="muted">Any folder works. It installs a small local helper and connects it to your agent. Nothing is added to your project.</p>
-          <div class="prompt"><code id="prompt"></code><button id="copy">Copy</button></div>
-          <p class="status" id="status">Waiting for the local helper…</p>
+          <h2>Review your page</h2>
+          <p class="muted">Open your app (localhost works out of the box). Hold <kbd>Alt</kbd> and click an element — <kbd>↑</kbd> or <b>↑ Parent</b> selects a larger block. Write what should change, press <kbd>Enter</kbd>. Repeat for everything you want fixed.</p>
+          <p class="muted">In DevTools device mode press <kbd>Alt</kbd><kbd>⇧</kbd><kbd>C</kbd>, then tap.</p>
         </div>
       </li>
-      <li class="step" id="step-use">
+      <li class="step active">
         <span class="mark">3</span>
         <div>
-          <h2>Review your app</h2>
-          <p class="muted">Restart Claude Code once, in your project folder. Open your app on localhost — the review panel asks which project it is.</p>
-          <p class="muted">Then hold <kbd>Alt</kbd>, click an element (<kbd>↑</kbd> selects its parent), write what should change, press <kbd>Enter</kbd>. Press <strong>Fix all</strong> — Claude picks the comments up in that Claude Code session by itself. The panel shows which session; type <kbd>/ui-review</kbd> in a session to pin Fix all to it.</p>
+          <h2>Copy for Claude, paste, done</h2>
+          <p class="muted">Press <b>Copy for Claude</b> in the review panel and paste into Claude (Claude Code, the Claude app, or any other agent). It gets your comments with instructions and hints to find the code: component, file, heading, text.</p>
+          <p class="muted">When the page updates, pins turn to <b>Changed — check</b>. Look, then <b>Accept</b> or <b>Reopen</b>.</p>
+        </div>
+      </li>
+      <li class="step" id="step-companion">
+        <span class="mark">+</span>
+        <div>
+          <details>
+            <summary><h2 style="display:inline">Optional: let Claude Code fix comments by itself</h2></summary>
+            <p class="muted">Paste this into Claude Code once. It installs a small local helper; then a <b>Fix all</b> button sends comments straight to your Claude Code session — no copy-paste. Nothing is added to your project.</p>
+            <div class="prompt"><code id="prompt"></code><button id="copy">Copy</button></div>
+            <p class="status" id="status">Not installed — copy mode works without it.</p>
+          </details>
         </div>
       </li>
     </ol>

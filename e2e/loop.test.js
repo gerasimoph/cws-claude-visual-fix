@@ -98,7 +98,7 @@ test('M0 loop: annotate → Fix all → agent → verify → accept', { timeout:
 
   const { stdout } = await promisify(execFile)(process.execPath, [CLI, 'setup', '--yes', '--skip-agent', '--wait', '20', '--extension-id', 'diidngfppbepogdmihpnfhfekeemedme', '--browser-dir', path.join(tmp, 'profile', 'NativeMessagingHosts')], { cwd: home, env });
   assert.match(stdout, /Browser connected: yes/, stdout);
-  await welcome.locator('#status.ok').waitFor();
+  await welcome.locator('#status.ok').waitFor({ state: 'attached' }); // inside the collapsed "Optional" block
 
   const page = await context.newPage();
   await page.goto(`${origin}/`);

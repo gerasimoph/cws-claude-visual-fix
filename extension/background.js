@@ -4,6 +4,7 @@
 const HOST_NAME = 'com.browser_feedback.companion';
 const CONTENT_SCRIPTS = ['lib/redact.js', 'lib/onboarding.js', 'content/anchor.js', 'content/capture.js', 'content/ui.js', 'content/main.js'];
 const DEFAULT_MATCHES = ['http://localhost/*', 'http://127.0.0.1/*', 'https://localhost/*'];
+const MAIN_WORLD_SCRIPT = 'content/probe.js';
 const IN_FLIGHT = new Set(['queued', 'working', 'verifying']);
 
 // ------------------------------------------------------------------ RPC peer
@@ -228,6 +229,7 @@ async function ensureInjected(tabId) {
   if (alive?.ok) return true;
   try {
     await chrome.scripting.executeScript({ target: { tabId }, files: CONTENT_SCRIPTS });
+    await chrome.scripting.executeScript({ target: { tabId }, files: [MAIN_WORLD_SCRIPT], world: 'MAIN' }).catch(() => {});
     return true;
   } catch { return false; }
 }
@@ -308,10 +310,13 @@ async function cropToJpeg(dataUrl, crop, viewport, maxWidth) {
 async function syncDynamicScripts() {
   const { origins = [] } = await chrome.permissions.getAll();
   const extra = origins.filter((o) => !DEFAULT_MATCHES.includes(o));
-  const existing = await chrome.scripting.getRegisteredContentScripts({ ids: ['bf-dynamic'] }).catch(() => []);
-  if (existing.length) await chrome.scripting.unregisterContentScripts({ ids: ['bf-dynamic'] }).catch(() => {});
+  const existing = await chrome.scripting.getRegisteredContentScripts({ ids: ['bf-dynamic', 'bf-dynamic-main'] }).catch(() => []);
+  if (existing.length) await chrome.scripting.unregisterContentScripts({ ids: existing.map((s) => s.id) }).catch(() => {});
   if (extra.length) {
-    await chrome.scripting.registerContentScripts([{ id: 'bf-dynamic', matches: extra, js: CONTENT_SCRIPTS, runAt: 'document_idle', persistAcrossSessions: true }]).catch((err) => console.warn(err));
+    await chrome.scripting.registerContentScripts([
+      { id: 'bf-dynamic', matches: extra, js: CONTENT_SCRIPTS, runAt: 'document_idle', persistAcrossSessions: true },
+      { id: 'bf-dynamic-main', matches: extra, js: [MAIN_WORLD_SCRIPT], runAt: 'document_idle', world: 'MAIN', persistAcrossSessions: true },
+    ]).catch((err) => console.warn(err));
   }
 }
 
@@ -322,6 +327,10 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   const handlers = {
     'ann.create': () => mutate(msg.annotation.origin, (list) => [...list, msg.annotation]).then(() => ({ ok: true })),
     'ann.update': () => mutate(origin, (list) => list.map((a) => (a.id === msg.id ? { ...a, ...msg.patch } : a))).then(() => ({ ok: true })),
+    'ann.patchMany': () => mutate(origin, (list) => list.map((a) => {
+      const p = (msg.patches || []).find((x) => x.id === a.id);
+      return p ? { ...a, ...p.patch } : a;
+    })).then(() => ({ ok: true })),
     'ann.delete': () => mutate(origin, (list) => list.filter((a) => a.id !== msg.id || IN_FLIGHT.has(a.status))).then(() => ({ ok: true })),
     'ann.clearDone': () => mutate(origin, (list) => list.filter((a) => a.status !== 'accepted' && a.status !== 'no_change')).then(() => ({ ok: true })),
     'ann.accept': async () => {

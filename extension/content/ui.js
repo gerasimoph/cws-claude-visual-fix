@@ -7,7 +7,7 @@
   if (BF.UI) return;
 
   const STATUS_LABEL = {
-    open: 'Open', queued: 'Queued', working: 'Working', verifying: 'Verifying', fixed: 'Fixed',
+    open: 'Open', sent: 'Sent to Claude', queued: 'Queued', working: 'Working', verifying: 'Verifying', fixed: 'Fixed',
     changed_check: 'Changed — check', no_change: 'No change', failed: 'Failed', accepted: 'Accepted',
   };
   const STATUS_ICON = { fixed: '✓', changed_check: '!', no_change: '–', failed: '×', accepted: '✓' };
@@ -31,6 +31,7 @@
   display: flex; align-items: center; justify-content: center; gap: 3px; font-size: 12px; font-weight: 600; color: #fff; background: #111827;
   box-shadow: 0 1px 4px rgba(0,0,0,.35); border: 2px solid #fff; transform: translate(-4px, -18px); user-select: none; }
 .pin[data-status=queued] { background: #6b7280; }
+.pin[data-status=sent] { background: #4f46e5; }
 .pin[data-status=working], .pin[data-status=verifying] { background: #2563eb; animation: pulse 1.2s ease-in-out infinite; }
 .pin[data-status=verifying] { background: #7c3aed; }
 .pin[data-status=fixed] { background: #059669; }
@@ -78,6 +79,7 @@ button.icon { border: none; background: none; padding: 0 4px; color: #6b7280; fo
 .item .n { font-weight: 600; color: #4f46e5; flex: none; }
 .item .text { flex: 1; overflow-wrap: anywhere; }
 .badge { flex: none; font-size: 11px; padding: 1px 7px; border-radius: 9px; background: #f3f4f6; color: #374151; white-space: nowrap; }
+.badge[data-status=sent] { background: #e0e7ff; color: #4338ca; }
 .badge[data-status=working] { background: #dbeafe; color: #1d4ed8; } .badge[data-status=verifying] { background: #ede9fe; color: #6d28d9; }
 .badge[data-status=fixed], .badge[data-status=accepted] { background: #d1fae5; color: #047857; }
 .badge[data-status=changed_check] { background: #fef3c7; color: #b45309; } .badge[data-status=failed] { background: #fee2e2; color: #b91c1c; }
@@ -172,14 +174,14 @@ button.icon { border: none; background: none; padding: 0 4px; color: #6b7280; fo
 
     // ---- composer --------------------------------------------------------------
 
-    openComposer(el, { reference = null, draft = '' } = {}) {
+    openComposer(el, { reference = null, draft = '', sendHint = 'fix now' } = {}) {
       const slot = this.$('.card-slot');
       slot.innerHTML = `<div class="card composer">
         <div class="target"><span>${esc(BF.capture.summary(el))}</span><button class="link" data-act="composer-parent" title="Comment on the parent element instead">↑ Parent</button></div>
         <textarea placeholder="What should change?">${esc(draft)}</textarea>
         <div class="row">
           <span>${reference ? `<span class="chip">ref: ${esc(BF.capture.label(reference))} <button class="icon" data-act="ref-clear" title="Remove reference">×</button></span>` : `<button class="link" data-act="ref-pick" title="Point at another element, e.g. 'same height as this one'">+ Reference element</button>`}</span>
-          <span class="hint">↵ add · ${MOD}↵ fix now</span>
+          <span class="hint">↵ add · ${MOD}↵ ${esc(sendHint)}</span>
         </div>
       </div>`;
       const card = slot.firstElementChild;
@@ -267,13 +269,13 @@ button.icon { border: none; background: none; padding: 0 4px; color: #6b7280; fo
           <button class="icon" data-act="panel-collapse" title="${state.collapsed ? 'Expand' : 'Collapse'}">${state.collapsed ? '▴' : '▾'}</button>
           <button class="icon" data-act="panel-close" title="Hide panel">×</button>
         </div>
-        ${c.text ? `<div class="conn ${c.kind}">${esc(c.text)}${c.command ? `<code>${esc(c.command)}</code>` : ''}${(c.actions || []).map((a) => `<button class="link" data-act="conn" data-id="${esc(a.id)}">${esc(a.label)}</button>`).join(' ')}${c.note ? `<span class="note">${esc(c.note)}</span>` : ''}</div>` : ''}
-        <div class="body">${state.items.length ? state.items.map((v) => this.itemHtml(v)).join('') : `<div class="empty"><kbd>${isMac ? '⌥' : 'Alt'}</kbd> + click any element to leave a comment.<br>In DevTools device mode: <kbd>${isMac ? '⌥' : 'Alt'}⇧C</kbd>, then tap.<br>Comments stay on this page until you fix them.</div>`}</div>
+        ${(c.text && c.text.trim()) || c.note ? `<div class="conn ${c.kind}">${esc(c.text)}${c.command ? `<code>${esc(c.command)}</code>` : ''}${(c.actions || []).map((a) => `<button class="link" data-act="conn" data-id="${esc(a.id)}">${esc(a.label)}</button>`).join(' ')}${c.note ? `<span class="note">${esc(c.note)}</span>` : ''}</div>` : ''}
+        <div class="body">${state.items.length ? state.items.map((v) => this.itemHtml(v)).join('') : `<div class="empty"><kbd>${isMac ? '⌥' : 'Alt'}</kbd> + click any element and write what should change.<br>Then <b>Copy for Claude</b> and paste it into Claude.<br>In DevTools device mode: <kbd>${isMac ? '⌥' : 'Alt'}⇧C</kbd>, then tap.</div>`}</div>
         ${state.target ? `<div class="fix-target"><label>Fix all →<select data-act="target">${state.target.options.map((o) => `<option value="${esc(o.id)}"${o.id === state.target.selected ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select></label>${state.target.warning ? `<div class="warn">${esc(state.target.warning)}</div>` : ''}</div>` : ''}
         <div class="foot">
-          ${state.running ? `<button class="primary" disabled>Running ${state.running.done}/${state.running.total}</button>` : `<button class="primary" data-act="fix-all" ${state.fixAllCount ? '' : 'disabled'}>Fix all${state.fixAllCount ? ` (${state.fixAllCount})` : ''}</button>`}
+          <button class="primary" data-act="copy-md" ${state.copyCount ? '' : 'disabled'} title="Copy the comments with instructions, then paste into Claude">Copy for Claude${state.copyCount ? ` (${state.copyCount})` : ''}</button>
+          ${state.running ? `<button disabled>Running ${state.running.done}/${state.running.total}</button>` : state.showFixAll ? `<button data-act="fix-all" ${state.fixAllCount ? '' : 'disabled'} title="Send to your Claude Code session directly">Fix all${state.fixAllCount ? ` (${state.fixAllCount})` : ''}</button>` : ''}
           <span class="spacer"></span>
-          <button class="link" data-act="copy-md" ${state.items.length ? '' : 'disabled'}>Copy as Markdown</button>
           ${state.hasDone ? '<button class="link" data-act="clear-done" title="Remove accepted and closed comments">Clear done</button>' : ''}
         </div>
       </div>`;
